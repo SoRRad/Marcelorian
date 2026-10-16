@@ -24,9 +24,10 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 
 from marcelorian.db.types import UTCDateTime
+from marcelorian.domain.recipients import normalize_address
 
 NAMING = {
     "ix": "ix_%(column_0_label)s",
@@ -176,6 +177,11 @@ class PiEmail(Base):
     invalid_reason: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime]
+
+    @validates("address")
+    def _canonical_address(self, _key: str, value: str) -> str:
+        # Every identity comparison assumes the canonical addr-spec (spec §3, §12).
+        return normalize_address(value)
 
 
 class LabSuggestion(Base):

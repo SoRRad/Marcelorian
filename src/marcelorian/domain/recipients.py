@@ -10,7 +10,22 @@ from dataclasses import dataclass
 
 from marcelorian.domain.enums import Mode
 
-_ADDRESS = re.compile(r"^[^@\s,;<>\"]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$")
+# A strict RFC 5322 addr-spec, ASCII only. The local part is a dot-atom built
+# from atext minus "=" and "?" (so it can never resemble an RFC 2047 encoded
+# word); quoted strings, comments, group syntax (":" / ";"), domain literals
+# and non-ASCII are all rejected. Every comparison in the app (allowlist,
+# real-PI, do-not-contact, duplicate outreach, prior contact) runs on this
+# canonical form, and build_mime re-parses the rendered header to confirm the
+# delivered mailbox is exactly this address.
+_ATEXT = r"[a-z0-9!#$%&'*+/^_`{|}~-]"
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_ADDRESS = re.compile(
+    rf"{_ATEXT}+(?:\.{_ATEXT}+)*@(?:{_LABEL}\.)+[a-z]{{2,63}}",
+    re.ASCII,
+)
+_MAILTO = "mailto:"
+MAX_LOCAL_PART = 64
+MAX_ADDRESS = 254
 
 
 class RecipientError(ValueError):
@@ -18,8 +33,19 @@ class RecipientError(ValueError):
 
 
 def normalize_address(address: str) -> str:
+    """Return the canonical lower-case addr-spec or raise ``RecipientError``.
+
+    A pasted ``mailto:`` link prefix is removed first; the remainder must then
+    be a single plain address with nothing else (no display name, no query).
+    """
     cleaned = address.strip().lower()
-    if not _ADDRESS.match(cleaned):
+    if cleaned.startswith(_MAILTO):
+        cleaned = cleaned[len(_MAILTO) :].strip()
+    if (
+        len(cleaned) > MAX_ADDRESS
+        or len(cleaned.partition("@")[0]) > MAX_LOCAL_PART
+        or not _ADDRESS.fullmatch(cleaned)
+    ):
         raise RecipientError("not a single plain email address")
     return cleaned
 

@@ -117,10 +117,70 @@ def test_platform_store_is_os_store_or_fails_clearly() -> None:
         ("open http://127.0.0.1:5000/bootstrap#t=abcDEF123_-", "abcDEF123_-"),
         ("code=4/0AbCdEf oauth callback", "4/0AbCdEf"),
         ("csrf_token=deadbeef", "deadbeef"),
+        # quoted / JSON / dict-repr shapes of the same secrets
+        ('{"installed": {"client_secret": "GOCSPX-SyntheticSecret123"}}', "SyntheticSecret123"),
+        ("{'code': '4/0ASyntheticAuthCode', 'scope': 'gmail.send'}", "4/0ASyntheticAuthCode"),
+        ('{"access_token": "SyntheticAccessToken9", "expires_in": 3599}', "SyntheticAccessToken9"),
+        ("password = 'SyntheticPassword9'", "SyntheticPassword9"),
+        ("client secret GOCSPX-BareSecret9 in text", "BareSecret9"),
+        ("id_token eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln", "eyJzdWIiOiIxIn0"),
+        # URL-encoded address, as Gmail API request URLs carry it
+        ("q=from%3A%22pat.example%40synthetic-univ.test%22", "pat.example%40synthetic-univ.test"),
     ],
 )
 def test_redaction(raw, forbidden) -> None:
     assert forbidden not in redact(raw)
+
+
+@pytest.fixture
+def log_file(tmp_path: Path):
+    from marcelorian.logging_setup import configure_logging
+
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    uvicorn = {n: logging.getLogger(n) for n in ("uvicorn", "uvicorn.error", "uvicorn.access")}
+    saved_uvicorn = {n: (lg.handlers[:], lg.propagate, lg.disabled) for n, lg in uvicorn.items()}
+    configure_logging(tmp_path)
+    try:
+        yield tmp_path / "marcelorian.log"
+    finally:
+        for handler in root.handlers:
+            handler.close()
+        root.handlers, root.level = saved_handlers, saved_level
+        for name, (handlers, propagate, disabled) in saved_uvicorn.items():
+            uvicorn[name].handlers, uvicorn[name].propagate = handlers, propagate
+            uvicorn[name].disabled = disabled
+
+
+def _flush() -> None:
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+
+
+def test_exception_tracebacks_are_redacted_in_the_log_file(log_file: Path) -> None:
+    log = logging.getLogger("marcelorian.services.gateway")
+    try:
+        raise RuntimeError("submission to pat.example@synthetic-univ.test; access_token=Tok9")
+    except RuntimeError:
+        log.exception("commit after accepted send failed for attempt %s", "att-1")
+    log.warning("stack check", stack_info=True, extra={})
+    _flush()
+    text = log_file.read_text("utf-8")
+    assert "commit after accepted send failed" in text
+    assert "pat.example@synthetic-univ.test" not in text and "Tok9" not in text
+
+
+def test_uvicorn_loggers_go_through_the_redacting_handlers(log_file: Path) -> None:
+    logging.getLogger("uvicorn.error").error("Exception in ASGI app for pi@synthetic-univ.test")
+    _flush()
+    text = log_file.read_text("utf-8")
+    assert "Exception in ASGI app" in text and "pi@synthetic-univ.test" not in text
+
+
+def test_malformed_record_never_raises_into_the_caller(log_file: Path) -> None:
+    logging.getLogger("marcelorian.review").warning("attempt %s outcome %s", "att-1")
+    _flush()
+    assert "unformattable log arguments" in log_file.read_text("utf-8")
 
 
 def test_masked_email_keeps_a_hint() -> None:

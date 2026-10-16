@@ -295,6 +295,17 @@ class World:
     def dispatch(self, message_id: int) -> DispatchResult:
         return self.gateway.dispatch(message_id)
 
+    def worker_cycle(self, message_id: int) -> DispatchResult:
+        """One dispatcher cycle: the worker's regular mailbox sync, then dispatch.
+
+        Spec §9.4 counts an evaluation as functioning only with a current sync, so tests
+        that model a healthy worker deferring for caps or pacing use this.
+        """
+        mode = Mode(self.message(message_id).mode)
+        sync = self.real_sync if mode.is_real else SandboxSync(self.factory, self.clock)
+        sync.sync_now()
+        return self.dispatch(message_id)
+
     # -- reads -------------------------------------------------------------------
     def message(self, message_id: int) -> Message:
         with transaction(self.factory) as s:

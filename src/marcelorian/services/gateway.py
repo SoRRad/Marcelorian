@@ -72,7 +72,7 @@ from marcelorian.domain.gmail_params import (
     prior_contact_query,
 )
 from marcelorian.domain.identifiers import new_x_marcelorian_id, opaque_token, rfc_message_id
-from marcelorian.domain.mime import build_mime
+from marcelorian.domain.mime import MimeAddressError, build_mime
 from marcelorian.domain.recipients import RecipientError, validate_recipient
 from marcelorian.domain.snapshot import SnapshotContent, SnapshotError, verify_canonical
 from marcelorian.domain.timing import SchedulingError, in_window, load_zone
@@ -217,6 +217,10 @@ class SendGateway:
                 rfc_message_id=app_message_id,
                 x_marcelorian_id=x_id,
                 date=self._clock.now(),
+            )
+        except MimeAddressError:
+            return self._record(
+                plan, _Verdict(Outcome.BLOCKED, "recipient_invalid", invalidate=True)
             )
         except SnapshotError:
             return self._record(
@@ -415,8 +419,10 @@ class SendGateway:
         if mode is Mode.TRANSPORT_TEST:
             addresses: tuple[str, ...] = (content.to,)  # the test address stands in for the PI
         else:
-            cluster = dnc.merge_cluster(session, campaign.pi_id)
-            addresses = tuple(sorted(dnc.cluster_addresses(session, cluster) | {content.to}))
+            # Every address of the PI's identity closure, so prior-contact and reply
+            # searches also cover re-discovered, unmerged records of the same person.
+            person = dnc.pi_identity(session, campaign.pi_id, (content.to,))
+            addresses = tuple(sorted(person.addresses))
         last_sent_at = None
         if message.step > 1:
             last_sent_at = session.scalar(
@@ -482,12 +488,9 @@ class SendGateway:
             assert message is not None
             if self._changed(message, plan):
                 return DispatchResult(Outcome.NOT_ELIGIBLE, "changed_during_preflight")
-            if prior_contact.unresolved_attempt_to(
-                session, set(plan.contact_addresses), plan.mode
-            ):
-                return self._apply_verdict(
-                    session, message, incomplete, self._clock.now(), plan.started
-                )
+            if prior_contact.unresolved_attempt_to(session, set(plan.contact_addresses), plan.mode):
+                held = _Verdict(Outcome.DEFERRED, DeferralReason.OWN_ATTEMPT_UNRESOLVED)
+                return self._apply_verdict(session, message, held, self._clock.now(), plan.started)
         if plan.self_send:
             # A transport_test self-send checks connectivity only (spec §12): searching the
             # sender's own address would match the whole mailbox. Recorded in DECISIONS.md.
@@ -513,6 +516,9 @@ class SendGateway:
             )
             if not check.complete:
                 return self._apply_verdict(session, message, incomplete, now, plan.started)
+            if check.app_duplicates:
+                duplicate = _Verdict(Outcome.BLOCKED, "duplicate_outreach", invalidate=True)
+                return self._apply_verdict(session, message, duplicate, now, plan.started)
             if check.unacknowledged:
                 prior_contact.open_review(
                     session, campaign, check.unacknowledged, actor=Actor.GATEWAY, now=now

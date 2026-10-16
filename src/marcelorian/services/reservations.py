@@ -130,9 +130,8 @@ def count_new_contacts(
     now: datetime,
     exclude_campaign_id: int | None = None,
 ) -> int:
-    in_window = (
-        (Reservation.status == ReservationStatus.CONSUMED.value)
-        & (Reservation.consumed_at > now - NEW_CONTACT_WINDOW)
+    in_window = (Reservation.status == ReservationStatus.CONSUMED.value) & (
+        Reservation.consumed_at > now - NEW_CONTACT_WINDOW
     )
     projected = Reservation.status == ReservationStatus.ACTIVE.value
     stmt = (

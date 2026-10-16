@@ -10,7 +10,9 @@
 * Unresolved attempts are only those in the same mailbox: live and
   transport_test share the real mailbox; sandbox only sees sandbox (C9).
 * Acknowledgment covers only the exact reviewed Gmail IDs. It never ignores
-  future mail, bypasses do-not-contact, or permits a duplicate sequence.
+  future mail, bypasses do-not-contact, or permits a duplicate sequence: in
+  live and sandbox a hit that is the app's own message for another campaign
+  blocks as ``duplicate_outreach`` instead of opening a review.
 * An incomplete search is never a clean result.
 """
 
@@ -49,6 +51,9 @@ class PriorContactCheck:
     complete: bool
     unacknowledged: tuple[str, ...] = ()
     reason: str | None = None
+    #: Hits that are the app's own messages for another campaign in this mailbox: a
+    #: duplicate app sequence, which acknowledgment can never permit (B14).
+    app_duplicates: tuple[str, ...] = ()
 
 
 def campaign_gmail_ids(session: Session, campaign_id: int) -> set[str]:
@@ -72,6 +77,32 @@ def campaign_gmail_ids(session: Session, campaign_id: int) -> set[str]:
             select(InboundEvent.gmail_message_id).where(
                 InboundEvent.campaign_id == campaign_id,
                 InboundEvent.classification == InboundClassification.OWN_MESSAGE.value,
+            )
+        )
+    )
+    return {i for i in ids if i}
+
+
+def other_campaign_gmail_ids(session: Session, campaign_id: int, mode: Mode) -> set[str]:
+    """Gmail IDs the app recorded as sent for any *other* campaign in the same mailbox."""
+    modes = same_mailbox_modes(mode)
+    ids = set(
+        session.scalars(
+            select(SendAttempt.gmail_message_id)
+            .join(Message, Message.id == SendAttempt.message_id)
+            .where(
+                Message.campaign_id != campaign_id,
+                SendAttempt.mode.in_(modes),
+                SendAttempt.gmail_message_id.is_not(None),
+            )
+        )
+    )
+    ids |= set(
+        session.scalars(
+            select(Message.gmail_message_id).where(
+                Message.campaign_id != campaign_id,
+                Message.mode.in_(modes),
+                Message.gmail_message_id.is_not(None),
             )
         )
     )
@@ -116,7 +147,17 @@ def evaluate(
         session, mailbox_email, campaign_id
     )
     hits = tuple(sorted({i for i in search.ids if i not in excluded}))
-    return PriorContactCheck(complete=True, unacknowledged=hits)
+    campaign = session.get(Campaign, campaign_id)
+    assert campaign is not None
+    mode = Mode(campaign.mode)
+    duplicates: tuple[str, ...] = ()
+    if mode is not Mode.TRANSPORT_TEST:
+        # In transport_test the address is an allowlisted tester standing in for the PI
+        # and reused by later test campaigns; earlier test mail there stays an ordinary,
+        # reviewable prior-contact hit.
+        own_elsewhere = other_campaign_gmail_ids(session, campaign_id, mode)
+        duplicates = tuple(sorted(set(search.ids) & own_elsewhere))
+    return PriorContactCheck(complete=True, unacknowledged=hits, app_duplicates=duplicates)
 
 
 def open_review(

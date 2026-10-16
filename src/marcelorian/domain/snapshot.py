@@ -17,6 +17,7 @@ from typing import Any
 
 from marcelorian.clock import ensure_utc
 from marcelorian.domain.enums import Mode
+from marcelorian.domain.recipients import RecipientError, normalize_address
 from marcelorian.domain.subjects import expected_subject
 
 SCHEMA = "marcelorian.snapshot.v1"
@@ -185,8 +186,13 @@ def validate_content(content: SnapshotContent, specialty_display_name: str) -> N
         raise SnapshotError("subject is not the exact fixed subject for this step")
     if not content.body.strip():
         raise SnapshotError("body is empty")
-    if "\r" in content.to or "\n" in content.to or "," in content.to:
-        raise SnapshotError("exactly one recipient address is allowed")
+    for address in (content.to, content.intended_recipient):
+        try:
+            canonical = normalize_address(address)
+        except RecipientError as exc:
+            raise SnapshotError("exactly one plain recipient address is allowed") from exc
+        if canonical != address:
+            raise SnapshotError("recipient addresses must be stored in canonical form")
     if content.test_override is not None and content.mode is not Mode.TRANSPORT_TEST:
         raise SnapshotError("a schedule override is only allowed in transport_test")
     if content.mode is not Mode.TRANSPORT_TEST and content.to != content.intended_recipient:

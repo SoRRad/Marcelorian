@@ -18,6 +18,7 @@ import json
 import math
 from dataclasses import asdict, dataclass, fields, replace
 from datetime import date, datetime, time, timedelta
+from functools import lru_cache
 from itertools import pairwise
 from typing import Any
 
@@ -159,19 +160,33 @@ def validate(settings: AppSettings) -> AppSettings:
     return normalized
 
 
+#: Weekday/date alignment, and with it every blackout rule (month-day ranges and
+#: weekday-defined federal holidays with their observed dates), repeats every 28 years
+#: between 1901 and 2099.
+_CALENDAR_CYCLE_YEARS = 28
+
+
+@lru_cache(maxsize=32)
 def _require_regular_windows(policy: WindowPolicy) -> None:
-    """Reject blackout combinations that leave no send day for a year or more."""
-    start = date(2024, 1, 1)  # covers a leap year and every weekday alignment
-    permitted = [
-        start + timedelta(days=offset)
-        for offset in range(3 * 366)
-        if (start + timedelta(days=offset)).weekday() in policy.weekdays
-        and not policy.is_blackout(start + timedelta(days=offset))
-    ]
-    if not permitted:
-        raise SettingsError("the blackout settings leave no day on which sending is allowed")
+    """Reject blackout combinations that leave no send day for a year or more.
+
+    Scans one full calendar cycle plus a year, so every gap between send days,
+    including the one that wraps around the cycle, appears in full; runs without a
+    send day at either end of the scan count as gaps too.
+    """
+    start = date(2024, 1, 1)
+    end = date(start.year + _CALENDAR_CYCLE_YEARS + 1, 1, 1)
+    permitted: list[date] = []
+    day = start
+    while day < end:
+        if day.weekday() in policy.weekdays and not policy.is_blackout(day):
+            permitted.append(day)
+        day += timedelta(days=1)
+    if len(permitted) < 2:
+        raise SettingsError("the blackout settings leave almost no day on which sending is allowed")
     gaps = [(b - a).days for a, b in pairwise(permitted)]
-    if max(gaps, default=0) >= MAX_DAYS_WITHOUT_WINDOW:
+    gaps += [(permitted[0] - start).days, (end - permitted[-1]).days]
+    if max(gaps) >= MAX_DAYS_WITHOUT_WINDOW:
         raise SettingsError("the blackout settings leave no send window for a year or more")
 
 

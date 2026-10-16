@@ -25,7 +25,6 @@ import threading
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -142,17 +141,23 @@ def _header(scope: MutableMapping[str, Any], name: bytes) -> str | None:
     return None
 
 
-def _cookie(scope: MutableMapping[str, Any], name: str) -> str | None:
+def _cookie_values(scope: MutableMapping[str, Any], name: str) -> list[str]:
+    """Every value sent for cookie ``name``, parsed leniently one pair at a time.
+
+    Cookies are scoped by host, not port, so any other page on 127.0.0.1 can add
+    nameless or malformed cookies (or even a same-named one) to our requests. A
+    strict parser such as ``SimpleCookie`` drops the whole header on one bad pair,
+    which would lock the applicant out of the UI, Pause included.
+    """
     raw = _header(scope, b"cookie")
     if not raw:
-        return None
-    cookie: SimpleCookie = SimpleCookie()
-    try:
-        cookie.load(raw)
-    except Exception:
-        return None
-    morsel = cookie.get(name)
-    return morsel.value if morsel else None
+        return []
+    values: list[str] = []
+    for chunk in raw.split(";"):
+        key, sep, value = chunk.partition("=")
+        if sep and key.strip() == name:
+            values.append(value.strip().strip('"'))
+    return values
 
 
 class SecurityMiddleware:
@@ -197,7 +202,11 @@ class SecurityMiddleware:
             await self.app(scope, receive, send_with_headers)
             return
 
-        session = self.security.lookup(_cookie(scope, SESSION_COOKIE))
+        session = None
+        for candidate in _cookie_values(scope, SESSION_COOKIE)[:8]:
+            session = self.security.lookup(candidate)
+            if session is not None:
+                break
         if session is None:
             await _reject(send_with_headers, 401, "Open Marcelorian from its tray icon to sign in.")
             return

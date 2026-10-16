@@ -31,7 +31,7 @@ from marcelorian.domain.identifiers import (
     rfc_message_id,
     sender_domain,
 )
-from marcelorian.domain.mime import build_mime
+from marcelorian.domain.mime import MimeAddressError, build_mime
 from marcelorian.domain.outcomes import OutcomeKind, classify_send_error
 from marcelorian.domain.recipients import (
     RecipientContext,
@@ -306,6 +306,17 @@ def test_read_requests_are_metadata_only() -> None:
         {"format": "metadata", "fields": "payload/parts"},
         {"format": "metadata"},
         {"format": "metadata", "fields": "id", "metadataHeaders": ["X-Secret"]},
+        # Gmail get methods default to format=full when format is omitted
+        {"userId": "me", "id": "m1", "fields": "*"},
+        {"userId": "me", "id": "m1", "fields": "id,threadId,payload"},
+        {"userId": "me", "id": "t1", "fields": "messages(id,payload)"},
+        # format=metadata without an explicit header allowlist returns every header
+        {"userId": "me", "id": "m1", "format": "metadata", "fields": "id,payload/headers"},
+        {"userId": "me", "id": "m1", "format": "metadata", "metadataHeaders": [], "fields": "id"},
+        # list requests: ids-only mask, no format, no unexpected parameters
+        {"userId": "me", "q": "x", "fields": "*"},
+        {"userId": "me", "q": "x", "fields": "messages(id,threadId),nextPageToken", "x": 1},
+        {"userId": "me", "q": "x", "format": "full", "fields": "messages(id,threadId)"},
     ],
 )
 def test_metadata_policy_rejects_content_requests(params: dict[str, object]) -> None:
@@ -421,6 +432,74 @@ def test_sandbox_only_uses_fake_transport() -> None:
 def test_normalize_address_rejects_non_single_addresses(bad: str) -> None:
     with pytest.raises(RecipientError):
         normalize_address(bad if not bad.endswith("\n") else bad + "x")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "mailto:a:b@x.test",  # RFC 5322 group syntax: delivers to b@x.test
+        "grp: a@x.test;",
+        "a:b@x.test",
+        "a..b@x.test",
+        ".a@x.test",
+        "a.@x.test",
+        "a@-x.test",
+        "a@x-.test",
+        "a@x..test",
+        "=?utf-8?q?a?=@x.test",  # could be read as an RFC 2047 encoded word
+        "a?b@x.test",
+        "a(b)@x.test",
+        '"a"@x.test',
+        "a@[192.0.2.1]",
+        "\u00e9@x.test",  # non-ASCII
+        "a@b@x.test",
+        "a@x.test?subject=hi",
+        "a@x.test\nBcc: z@q.test",
+        "mailto:",
+        "x" * 65 + "@x.test",
+    ],
+)
+def test_normalize_address_accepts_only_a_strict_addr_spec(bad: str) -> None:
+    with pytest.raises(RecipientError):
+        normalize_address(bad)
+
+
+@pytest.mark.parametrize(
+    ("raw", "canonical"),
+    [
+        ("Pat.Example@Synthetic-Univ.TEST", "pat.example@synthetic-univ.test"),
+        ("  mailto:pi@synthetic-univ.test ", "pi@synthetic-univ.test"),  # pasted link
+        ("MAILTO:pi@synthetic-univ.test", "pi@synthetic-univ.test"),
+        ("o'brien+lab@med.synthetic-univ.test", "o'brien+lab@med.synthetic-univ.test"),
+    ],
+)
+def test_normalize_address_canonical_form(raw: str, canonical: str) -> None:
+    assert normalize_address(raw) == canonical
+
+
+def test_snapshot_requires_canonical_recipient() -> None:
+    with pytest.raises(SnapshotError):
+        validate_content(
+            content(
+                to="mailto:pi@synthetic-univ.test", intended_recipient="pi@synthetic-univ.test"
+            ),
+            "Ophthalmology",
+        )
+    with pytest.raises(SnapshotError):
+        validate_content(
+            content(to="PI@synthetic-univ.test", intended_recipient="PI@synthetic-univ.test"),
+            "Ophthalmology",
+        )
+
+
+@pytest.mark.parametrize(
+    "to",
+    ["mailto:real-pi@synthetic-univ.test", "Pat <pi@synthetic-univ.test>", "a@x.test, b@x.test"],
+)
+def test_mime_reparses_the_to_header_and_refuses_any_other_mailbox(to: str) -> None:
+    """Defence in depth: the delivered mailbox must be exactly the approved address."""
+    with pytest.raises(MimeAddressError):
+        build(to=to, intended_recipient=to)
 
 
 # -- transitions ---------------------------------------------------------------------------------

@@ -37,11 +37,13 @@ from marcelorian.db.models import (
     PiEmail,
     ProfileFact,
     RecipientAllowlist,
+    SendAttempt,
     SnapshotAttachment,
 )
 from marcelorian.domain.enums import (
     HOLDING_STATES,
     Actor,
+    AttemptStatus,
     CampaignState,
     DependencyKind,
     FactStatus,
@@ -267,9 +269,7 @@ def save_draft(
     # The versions the draft text was written from (B18): approval refuses if they moved.
     message.draft_dependencies_json = json.dumps(
         {
-            "facts": [
-                [fact_id, _fact_version(session, fact_id)] for fact_id in content.fact_ids
-            ],
+            "facts": [[fact_id, _fact_version(session, fact_id)] for fact_id in content.fact_ids],
             "pi_version": pi.version,
         }
     )
@@ -332,35 +332,57 @@ def _end_snapshot(
 
 
 def duplicate_outreach(session: Session, campaign: Campaign, address: str | None) -> bool:
-    """Another campaign in this mode already reached (or holds outreach for) this identity."""
-    cluster = dnc.merge_cluster(session, campaign.pi_id)
+    """Another campaign in this mode already reached (or holds outreach for) this person.
+
+    "This person" is the full identity closure (spec §3; C7): confirmed merges, every
+    exact known address and ORCID/OpenAlex, so an unmerged re-discovered record
+    never gets a second app sequence (B14). Another campaign counts when it is active,
+    has a sent message, or has any attempt that was or may have been submitted to one
+    of this identity's addresses.
+    """
+    mode = Mode(campaign.mode)
+    # In transport_test the recipient is an allowlisted tester standing in for the PI,
+    # shared by design across test campaigns; identity comes from the PI record only.
+    extra = (address,) if address and mode is not Mode.TRANSPORT_TEST else ()
+    person = dnc.pi_identity(session, campaign.pi_id, extra)
     active_states = [
         CampaignState.OUTREACH_PENDING.value,
         CampaignState.PAUSED_REVIEW.value,
         CampaignState.CONVERSATION.value,
         CampaignState.SEQUENCE_COMPLETE.value,
     ]
-    others = session.scalars(
-        select(Campaign).where(
-            Campaign.mode == campaign.mode, Campaign.id != campaign.id, Campaign.pi_id.in_(cluster)
+    others = set(
+        session.scalars(
+            select(Campaign).where(
+                Campaign.mode == mode.value,
+                Campaign.id != campaign.id,
+                Campaign.pi_id.in_(person.pi_ids),
+            )
         )
-    ).all()
+    )
     for other in others:
         if other.state in active_states or _sent_messages(session, other):
             return True
-    if address and Mode(campaign.mode) is not Mode.TRANSPORT_TEST:
-        same_address = session.scalars(
-            select(Campaign)
-            .join(PiEmail, PiEmail.pi_id == Campaign.pi_id)
+    if person.addresses:
+        reached = session.scalar(
+            select(func.count())
+            .select_from(SendAttempt)
+            .join(Message, Message.id == SendAttempt.message_id)
             .where(
-                Campaign.mode == campaign.mode,
-                Campaign.id != campaign.id,
-                func.lower(PiEmail.address) == address.lower(),
+                Message.campaign_id != campaign.id,
+                SendAttempt.mode == mode.value,
+                func.lower(SendAttempt.recipient).in_(person.addresses),
+                SendAttempt.status.in_(
+                    [
+                        AttemptStatus.SENT.value,
+                        AttemptStatus.IN_FLIGHT.value,
+                        AttemptStatus.UNCERTAIN.value,
+                    ]
+                ),
             )
-        ).all()
-        for other in same_address:  # whatever its state, once it reached the address
-            if other.state in active_states or _sent_messages(session, other):
-                return True
+        )
+        if reached:
+            return True
     return False
 
 
@@ -568,7 +590,10 @@ def approve(
         policy = replace(policy, always_open=True)
     due_at = now if message.step == 1 else message.due_at
     assert due_at is not None
-    window = eligible_window(due_at, now, tz, policy)
+    try:
+        window = eligible_window(due_at, now, tz, policy)
+    except SchedulingError as exc:  # defensive: settings validation rejects such policies
+        raise ApprovalError(["no_permitted_window"]) from exc
 
     capacity: CapacityResult | None = None
     if message.step == 1:

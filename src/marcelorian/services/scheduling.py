@@ -4,9 +4,12 @@ Missed-window rule
 ------------------
 When an approved message's assigned window ``[ws, we)`` has ended unsent:
 
-1. The relevant portion is ``[max(ws, approved_at), we)`` minus intervals in
-   which dispatch for the message's mode was deliberately off (persistent
-   pause, another mode active), taken from ``runtime_state_log``.
+1. The relevant portion starts at the latest of ``ws``, the approval time and
+   the due time, ends at ``we``, and contains only instants the *current*
+   window policy permits (blackouts or narrowed hours added after approval
+   are honoured). Intervals in which dispatch for the message's mode was
+   deliberately off (persistent pause, another mode active), taken from
+   ``runtime_state_log``, are removed (DECISIONS note 16; spec §9.4).
 2. If that portion is empty, the message simply rolls to the next window.
 3. If any *functioning* evaluation of the message (worker ran with valid
    authorization and a current sync) falls inside the portion, it was
@@ -37,7 +40,7 @@ from marcelorian.domain.enums import (
     PauseReason,
     SnapshotState,
 )
-from marcelorian.domain.snapshot import verify_canonical
+from marcelorian.domain.snapshot import SnapshotError, verify_canonical
 from marcelorian.domain.timing import (
     SchedulingError,
     WindowPolicy,
@@ -48,6 +51,7 @@ from marcelorian.domain.timing import (
 )
 from marcelorian.services import campaigns as campaign_svc
 from marcelorian.services import runtime
+from marcelorian.services import sync as sync_svc
 from marcelorian.services.audit import audit
 
 #: Evaluations with these reasons are not evidence that the message was considered.
@@ -57,6 +61,32 @@ _NOT_CONSIDERATION = (
     DeferralReason.OUTSIDE_WINDOW.value,
     DeferralReason.NOT_DUE.value,
 )
+
+
+#: Gmail coverage counts as a *current sync* for an evaluation when it is at most this
+#: old at the evaluation's start: three dispatcher polling cycles (spec §2, §9.4; note 3).
+CURRENT_SYNC_TOLERANCE = timedelta(minutes=15)
+
+
+def evaluation_functioning(
+    session: Session, message: Message, evaluated_at: datetime, reason: DeferralReason | str | None
+) -> bool:
+    """Spec §9.4: functioning only with valid authorization and a current sync.
+
+    Decided from the worker's recorded state, not from the deferral reason alone, so a
+    local cap or pacing deferral while Gmail coverage is stale is not evidence that the
+    message was considered (B7). Deferrals that mean the check itself could not run are
+    never functioning.
+    """
+    if isinstance(reason, DeferralReason) and reason in NON_FUNCTIONING_DEFERRALS:
+        return False
+    mode = Mode(message.mode)
+    if mode.is_real and runtime.get_runtime(session, evaluated_at).auth_blocked:
+        return False
+    coverage = sync_svc.coverage(session, sync_svc.mailbox_key_for(mode), evaluated_at)
+    if coverage.gap_open or coverage.last_gmail_coverage_at is None:
+        return False
+    return coverage.last_gmail_coverage_at >= evaluated_at - CURRENT_SYNC_TOLERANCE
 
 
 def record_evaluation(
@@ -69,9 +99,7 @@ def record_evaluation(
     functioning: bool | None = None,
 ) -> DispatchEvaluation:
     if functioning is None:
-        functioning = not (
-            isinstance(reason, DeferralReason) and reason in NON_FUNCTIONING_DEFERRALS
-        )
+        functioning = evaluation_functioning(session, message, now, reason)
     row = DispatchEvaluation(
         message_id=message.id,
         mode=message.mode,
@@ -209,6 +237,10 @@ def apply_missed_window_rule(
             reason = "missed_window"
         except SchedulingError:
             reason = "no_permitted_window"  # defensive: settings validation prevents this
+        except SnapshotError:
+            # Untrustworthy evidence never rolls a message forward; contained per message
+            # so one bad snapshot cannot stop the rule (or startup recovery) for others.
+            reason = "snapshot_invalid"
         _require_reapproval(session, message, snapshot, end, reason, actor=actor, now=now)
         results.append((message.id, "needs_reapproval"))
     return results

@@ -180,3 +180,34 @@ def test_oversized_form_rejected(client, security) -> None:
         headers={"Origin": ORIGIN, "Content-Type": "application/x-www-form-urlencoded"},
     )
     assert response.status_code == 413
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "foo; {session}",  # nameless cookie set by another 127.0.0.1 page
+        "{session}; theme=dark mode",  # value containing a space
+        'prefs={{"a": 1}}; {session}',  # unencoded JSON value
+        f"{SESSION_COOKIE}=decoy; {{session}}",  # same-named decoy from another port
+    ],
+)
+def test_foreign_loopback_cookies_never_lock_out_the_session(client, security, extra) -> None:
+    """Cookies are scoped by host, not port: other local pages share the jar (spec §2)."""
+    csrf = sign_in(client, security)
+    session_id = client.cookies.get(SESSION_COOKIE)
+    client.cookies.clear()
+    header = extra.format(session=f"{SESSION_COOKIE}={session_id}")
+    assert client.get("/", headers={"Cookie": header}).status_code == 200
+    response = client.post(
+        "/actions/pause",
+        headers={"Cookie": header, "Origin": ORIGIN, "X-CSRF-Token": csrf},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_cookie_without_a_valid_session_is_still_rejected(client, security) -> None:
+    sign_in(client, security)
+    client.cookies.clear()
+    for header in ("foo", f"{SESSION_COOKIE}=", f"{SESSION_COOKIE}=forged; other=1"):
+        assert client.get("/", headers={"Cookie": header}).status_code == 401

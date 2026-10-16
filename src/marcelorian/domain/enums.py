@@ -175,6 +175,9 @@ class DeferralReason(StrEnum):
     SYNC_GAP = "sync_gap"
     AUTH_REQUIRED = "auth_required"
     PRIOR_CONTACT_CHECK_INCOMPLETE = "prior_contact_check_incomplete"
+    #: A deliberate safety hold by a functioning worker: the app's own earlier attempt
+    #: to one of this person's addresses is still unresolved (B14). Not an outage.
+    OWN_ATTEMPT_UNRESOLVED = "own_attempt_unresolved"
     REPLY_CHECK_INCOMPLETE = "reply_check_incomplete"
     TRANSPORT_UNAVAILABLE = "transport_unavailable"
 

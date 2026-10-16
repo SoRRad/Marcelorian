@@ -125,7 +125,7 @@ def test_cap_only_deferral_is_not_missed_window(world) -> None:
     ma = world.draft_and_approve(a)
     world.draft_and_approve(b)
     world.settings(pending_per_institution=1)
-    world.dispatch(ma)
+    world.worker_cycle(ma)
     world.clock.advance(timedelta(hours=3))  # past 11:00 New York
     with transaction(world.factory) as s:
         actions = scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s))

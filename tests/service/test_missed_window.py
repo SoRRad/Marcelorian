@@ -72,7 +72,7 @@ def test_functioning_deferral_in_window_rolls_to_next_window(queued) -> None:
         runtime.resume_dispatch(s, actor=Actor.APPLICANT, now=world.clock.now())
     # A cap-only deferral during the window: the message was considered.
     world.settings(pending_per_institution=0)
-    assert world.dispatch(mid).reason == "over_capacity"
+    assert world.worker_cycle(mid).reason == "over_capacity"
     world.clock.set(at(20, 11))
     assert apply_rule(world) == [(mid, "rolled")]  # B6: cap deferral is not a miss
     message = world.message(mid)
@@ -102,10 +102,10 @@ def test_brief_restart_within_window_preserves_queue(queued) -> None:
     world, _camp, mid = queued
     world.settings(pending_per_institution=0)  # keep it deferred so it is not sent
     world.clock.set(at(20, 8, 1))
-    world.dispatch(mid)
+    world.worker_cycle(mid)
     world.rebuild_gateway()  # restart gap 08:01 - 10:30
     world.clock.set(at(20, 10, 30))
-    world.dispatch(mid)
+    world.worker_cycle(mid)
     world.clock.set(at(20, 11))
     assert apply_rule(world) == [(mid, "rolled")]
 
@@ -156,7 +156,7 @@ def test_approval_near_window_end_only_counts_remaining_portion(world) -> None:
     camp2 = world.campaign(world.pi(world.institution()))
     mid2 = world.draft_and_approve(camp2)
     world.settings(pending_per_institution=0)
-    world.dispatch(mid2)  # evaluated within the remaining two minutes
+    world.worker_cycle(mid2)  # evaluated within the remaining two minutes
     world.clock.set(at(21, 11))
     assert apply_rule(world) == [(mid2, "rolled")]
 

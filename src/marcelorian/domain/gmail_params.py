@@ -44,7 +44,9 @@ REQUIRED_SCOPES: frozenset[str] = frozenset(
     }
 )
 
-_FORBIDDEN_FIELD_TOKENS = ("snippet", "raw", "body", "parts", "attachment")
+#: The only parameters each kind of read request may carry.
+_GET_KEYS = frozenset({"userId", "id", "format", "metadataHeaders", "fields"})
+_LIST_KEYS = frozenset({"userId", "q", "includeSpamTrash", "fields", "maxResults", "pageToken"})
 
 
 class MetadataPolicyError(ValueError):
@@ -85,19 +87,39 @@ def message_list_params(query: str, page_token: str | None = None) -> dict[str, 
 
 
 def assert_metadata_only(params: Mapping[str, Any]) -> None:
-    """Reject any read request that could return bodies, snippets or attachments."""
-    if "format" in params and params["format"] != "metadata":
-        raise MetadataPolicyError("only format=metadata is permitted")
-    fields = str(params.get("fields", ""))
-    if not fields:
-        raise MetadataPolicyError("a fields mask is required")
-    lowered = fields.lower()
-    for token in _FORBIDDEN_FIELD_TOKENS:
-        if token in lowered:
-            raise MetadataPolicyError(f"fields mask must not include {token!r}")
-    headers = params.get("metadataHeaders")
-    if headers is not None and not set(headers) <= set(METADATA_HEADERS):
-        raise MetadataPolicyError("metadataHeaders must stay within the allowlist")
+    """Reject any read request that could return bodies, snippets or attachments.
+
+    A positive allowlist, not a deny-list: Gmail's ``get`` methods default to
+    ``format=full`` and partial-response masks accept wildcards, so anything not
+    exactly one of the shapes built above is refused.
+
+    * ``messages.get`` / ``threads.get`` (identified by ``id``): ``format`` must be
+      ``metadata``, ``metadataHeaders`` a non-empty subset of the allowlist, and
+      ``fields`` exactly ``MESSAGE_FIELDS`` or ``THREAD_FIELDS``.
+    * ``messages.list``: ``fields`` exactly ``LIST_FIELDS``; no ``format`` or headers.
+    """
+    if "id" in params:
+        unknown = set(params) - _GET_KEYS
+        if unknown:
+            raise MetadataPolicyError(f"unexpected get parameters: {sorted(unknown)}")
+        if params.get("format") != "metadata":
+            raise MetadataPolicyError("get requests must set format=metadata")
+        headers = params.get("metadataHeaders")
+        if (
+            not isinstance(headers, (list, tuple))
+            or not headers
+            or not all(isinstance(h, str) for h in headers)
+            or not set(headers) <= set(METADATA_HEADERS)
+        ):
+            raise MetadataPolicyError("an explicit metadataHeaders allowlist is required")
+        if params.get("fields") not in (MESSAGE_FIELDS, THREAD_FIELDS):
+            raise MetadataPolicyError("get requests must use the fixed metadata fields mask")
+        return
+    unknown = set(params) - _LIST_KEYS
+    if unknown:
+        raise MetadataPolicyError(f"unexpected list parameters: {sorted(unknown)}")
+    if params.get("fields") != LIST_FIELDS:
+        raise MetadataPolicyError("list requests must use the fixed ids-only fields mask")
 
 
 def _quote(address: str) -> str:
