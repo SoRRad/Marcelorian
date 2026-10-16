@@ -15,10 +15,13 @@ The application promises **duplicate-execution protection and conservative handl
 
 - Build in the phases in §18. **Stop at the end of each phase.** Summarize what was built, list what is unverified, and wait for my go-ahead.
 - Before writing code in P0, list any ambiguities or contradictions you find in this spec and ask me. Never silently resolve anything affecting sending, caps, data sharing, or AI inputs.
-- Write tests with the code. Scheduling, caps, state transitions, and the send gateway must be unit-tested against a fake Gmail transport and an injected clock **before** any real Gmail send.
+- Write tests with the code. Scheduling, caps, state transitions, and the send gateway must be unit-tested against a fake Gmail transport and an injected clock **before** any real Gmail send. These pure safety rules are therefore built in P0, not P2 (§18; decision B1).
 - Recheck official provider documentation (Google, OpenAlex, NCBI, NIH RePORTER, Anthropic) when implementing an integration. Record the date checked in code comments or docs. Mocked tests do not prove a live integration.
 - Never commit secrets or real applicant data. Never contact a real PI during development.
 - Prefer boring, well-maintained, pinned libraries. Do not add agent frameworks, a cloud queue, a service account, an admin dashboard, or new paid services.
+- **Repository publication is conditional (A1–A2).** Inspect the actual remote, branches, permissions, and visibility first. Publish to the remote only when it is confirmed private and writable; otherwise keep working in local Git and report the condition. Never force-push, overwrite branches, change visibility or branch protection, or merge.
+- **Development is not Windows acceptance (A3).** The cross-platform core may be developed and unit-tested on Linux. Windows-specific adapters sit behind explicit interfaces. Windows CI results, and interactive desktop behavior (OAuth, tray, toasts, sleep/resume, Credential Manager), are reported separately; mocks never establish desktop acceptance.
+- Decisions taken after the v2 review are recorded in `docs/DECISIONS.md` with their IDs (A1–D5). This spec remains the single source of rules.
 
 ---
 
@@ -32,11 +35,11 @@ The application promises **duplicate-execution protection and conservative handl
 | Specialty | Ophthalmology, all subspecialties, via a config file. New specialty = new config file. |
 | Geography | US institutions only. |
 | Subject | Email 1: `Research Position Application – Ophthalmology` (specialty display name from config). Emails 2–4 reply in the same thread with one normalized `Re:` prefix. No personalized subjects. |
-| Sequence | 4 emails total. Email 2 is due 7×24 h after Email 1 **actually sent**. Email 3 is due 7×24 h after Email 2 actually sent. Email 4 is due 1 calendar month after Email 3 actually sent. A setting allows N days for the last interval. |
+| Sequence | 4 emails total. Email 2 is due 7×24 h after Email 1 **actually sent**. Email 3 is due 7×24 h after Email 2 actually sent. Email 4 is due 1 calendar month after Email 3 actually sent. A setting allows N days for the last interval (calendar days in the PI's time zone; §9.3, C8). |
 | Approval | Every message, including each follow-up, is approved individually. Approval authorizes one immutable snapshot (§9.1). |
 | Sending | A tray worker starts at Windows login (with explicit setup consent). Approved messages are queued and dispatched in the next permitted window. If approved inside a window, they dispatch promptly once all checks and pacing allow. |
 | Window | Tue–Thu, 08:00 (inclusive) to 11:00 (exclusive), in the PI's **verified** IANA time zone. |
-| Caps | 2 pending PIs per institution; 1 per lab; 3 newly contacted PIs per institution per rolling 30 days; 25 app-originated real Gmail submissions per rolling 24 hours. All adjustable. |
+| Caps | 2 pending PIs per institution; 1 per lab; 3 newly contacted PIs per institution per rolling 30 days; 25 app-originated real Gmail submissions per rolling 24 hours. All adjustable (validated; increases above these defaults need explicit confirmation and are audited; §11, B16). |
 | Slot release | A genuine reply or a successfully sent Email 4 frees the pending slot. Auto-replies keep the slot. Confirmed bounces stop the sequence. Manual closures are auditable. |
 | Funding | Paid first. Unpaid stays eligible, with a flag. Unknown proceeds normally and is marked. All messages still need applicant approval. The unpaid flag is informational for the owner, not an extra approval step. |
 | Records | Local SQLite is authoritative. Two CSVs are exports. A consented, applicant-owned Google Sheet is a reporting copy for the owner and never a source of instructions. |
@@ -54,11 +57,12 @@ The application promises **duplicate-execution protection and conservative handl
 - **APScheduler** (in-process) plus a dispatcher that can be woken immediately on approval. Polling every 5 minutes is the fallback.
 - **pystray** for the tray icon. **win10toast**/**windows-toasts** (or similar maintained library) for notifications.
 - **google-auth-oauthlib** (InstalledAppFlow, Desktop client, loopback redirect) and **google-api-python-client**. **Disable automatic retries for `messages.send`** in the client and in any wrapper.
-- **anthropic** SDK. The model is configurable, default `claude-sonnet-5-5`; validate access with the pilot credential at setup.
-- **keyring** with Windows Credential Manager for all secrets and tokens. **No plaintext fallback**: if keyring is unavailable, setup fails clearly.
+- **anthropic** SDK. The model is configurable, default `claude-sonnet-5-5`. At local setup, validate credential/model access with an authenticated model-metadata lookup and **no generation request**; label it as credential/model-access validation, not proof of inference billing, remaining budget, or successful generation (D3).
+- **keyring** with Windows Credential Manager for all secrets and tokens. **No plaintext fallback**: if keyring is unavailable, setup fails clearly. Tests may inject an in-memory secret store; production code can never discover or select it, and no live credentials are used in development or CI (A3).
 - **pdfplumber**/**pypdf** for local CV text extraction. **httpx** for public APIs.
 - **tzdata** bundled (Windows may lack the IANA database).
-- **PyInstaller** (onedir) + **Inno Setup**. **pytest**. **GitHub Actions** on `windows-latest` runs tests and builds the installer artifact.
+- **PyInstaller** (onedir) + **Inno Setup**. **pytest**, **hypothesis** property tests for timing and cap boundaries, **ruff**, and strict typing (mypy) for safety-critical modules (D4).
+- **GitHub Actions** runs ordinary Ubuntu and `windows-latest` test jobs with least-privilege `permissions`, job timeouts, and cancellation of superseded runs; no applicant secrets and no live service calls. Recheck current GitHub billing documentation and the account's allowance before enabling runs; never enable paid overages or alter budgets. The installer artifact build is added in P5 (A4).
 
 ### Paths
 - App data: `%LOCALAPPDATA%\Marcelorian\` (DB, logs, backups, CV versions).
@@ -82,7 +86,7 @@ The application promises **duplicate-execution protection and conservative handl
 ### Core tables (names can be adapted; the distinctions cannot)
 `applicant_profile`, `profile_fact` (with confirmation status and version), `cv_version` (file, SHA-256, uploaded_at), `institution` (ROR ID, name, city, state, IANA tz, tz_verified, group_id), `lab_group` (verified flag), `pi` (OpenAlex ID, ORCID, name, salutation, salutation_verified, institution, lab_group, current_role_verified + evidence), `pi_email` (address, confidence A/B/C, source, ownership_verified, verified_by, verified_at, invalid flag), `evidence` (pi_id, type, URL, title, excerpt, retrieved_at), `grant_evidence`, `opportunity` (posted jobs), `assessment`, `campaign`, `message`, `approval_snapshot`, `send_attempt`, `inbound_event`, `reservation`, `budget_ledger`, `task` (referrals, contact-later), `audit_event`, `worker_heartbeat`, `sync_state`, `settings`, `consent`.
 
-Every row that relates to sending carries a **`mode`** (`sandbox`, `transport_test`, `live`). Modes never share campaigns, approvals, threads, budgets, exports, or reports, except for the real-submission budget (§11).
+Every row that relates to sending carries a **`mode`** (`sandbox`, `transport_test`, `live`). Modes never share campaigns, approvals, logical messages, thread mappings, institution/lab capacity, projected contacts, exports, or reports. **Documented exceptions (C9):** mailbox synchronization (one mailbox-level cursor/coverage record) and the real Gmail submission/pacing ledger are shared by `live` and `transport_test`; `sandbox` shares neither (§10, §11). Real profile/PI/evidence/assessment records may be reused across modes; genuine edits to them are visible everywhere and follow the re-approval rules (§9.1). Synthetic identities and simulated state changes can never alter live records or be silently promoted into them.
 
 ### Campaign lifecycle (one per applicant × PI × mode)
 
@@ -93,11 +97,16 @@ Every row that relates to sending carries a **`mode`** (`sandbox`, `transport_te
 | `paused_review` | Reason: auto_reply, delivery_notice, manual_applicant_message, unknown_participant, ambiguous_thread, send_uncertain, sync_gap, prior_contact_found, missed_window | **Yes** |
 | `conversation` | Genuine reply received. Sequence stopped. Still visible. | No |
 | `sequence_complete` | Email 4 sent. Reply monitoring continues; a later reply moves it to `conversation`. | No |
-| `closed` | Outcome: bounce_confirmed, no_opening, do_not_contact, applicant_closed (reason required), cancelled_before_first_send | No |
+| `closed` | Outcome: bounce_confirmed, no_opening, do_not_contact, applicant_closed (reason required) | No |
 
 **Invariants**
 - A campaign whose follow-up is in any message state keeps its slot. Drafting never releases a slot.
 - Only these release a slot: a genuine reply, Email 4 sent, or a `closed` outcome. Cancelling an unsent Email 1 releases its reservation. Revoking a follow-up's approval does not.
+- **Cancel before first send (B3):** cancelling an unsent Email 1 returns the campaign to `candidate`, preserves the logical message and all audit history (audited as `cancelled_before_first_send`), and releases its capacity and projected-contact reservations. Re-drafting creates a new revision and requires fresh approval. This is allowed only when the campaign has no sent message and no in-flight or uncertain attempt; a missing `sent_at` is not proof of non-submission. Cancellation never resets uncertainty and never lets another Email 1 bypass reconciliation, do-not-contact, or prior-contact checks.
+- **Reservations survive failure (B4):** a campaign that legitimately owns reservations keeps them while its Email 1 is `failed_definite` or `needs_reapproval`, until re-approval or explicit cancellation/closure. The UI shows that capacity remains reserved. Moving into a review state never creates a reservation.
+- **Follow-up revoke and stop (B5):** *Revoke* returns an approved, unclaimed follow-up to `awaiting_approval` and keeps the slot. *Stop this follow-up sequence* disables further generation and dispatch and keeps the slot until the applicant closes with a reason or deliberately re-drafts the next unsent step. An already-sent step is never re-drafted.
+- **Independent pause reasons (B13):** pause reasons are tracked individually; resolving one never clears another. Recovery or a late result never restarts a stopped sequence, never forces `outreach_pending`, and never overwrites a newer `conversation` or `closed` state.
+- A genuine reply frees the unanswered pending slot but never erases an unresolved submission attempt, its budget hold, or the new-contact ledger entry (B13).
 - `sequence_complete` stops sending, not monitoring.
 
 ### Message lifecycle (one logical message per `(campaign_id, step, mode)`, unique)
@@ -105,15 +114,18 @@ Every row that relates to sending carries a **`mode`** (`sandbox`, `transport_te
 
 Side states:
 - `failed_definite`: Gmail definitively rejected the message before acceptance. It may be re-approved.
-- `uncertain`: the outcome is unknown. Never auto-retried.
+- `uncertain`: the outcome is unknown. Never auto-retried. A Cancel button never clears it (B5).
 - `cancelled`
-- `needs_reapproval`: snapshot invalidated or assigned window missed.
+- `needs_reapproval`: snapshot invalidated (a dependency or the message's own content changed, §9.1) or assigned window missed (§9.4).
+
+Cancelling a claimed (`sending`) message is not a recall: the UI says submission may already have started, future steps stop, and the current attempt is reconciled (B5, §9.6).
 
 Revisions create new `approval_snapshot` versions, not new logical messages. Every transition writes an `audit_event` (timestamp, actor, reason).
 
 ### Identity and duplicate protection
 - Re-discovery, PI merges, or a second campaign must never bypass do-not-contact or duplicate-outreach checks.
-- Merging PIs preserves all contact and sending history.
+- **Do-not-contact matching (C7):** verified PI identity and aliases, confirmed merged records, exact known addresses, and reliable ORCID/OpenAlex associations. Name + institution alone produces a review warning, never an automatic identity match. Simulated do-not-contact events (sandbox, transport_test) never edit the applicant's live do-not-contact list.
+- Merging PIs preserves all contact and sending history, and all restrictions.
 - Homonymous authors are never auto-merged; merges need the applicant's confirmation.
 
 ---
@@ -122,13 +134,15 @@ Revisions create new `approval_snapshot` versions, not new logical messages. Eve
 
 ### Profile (wizard + editable)
 - **Identity and training:** full name, preferred name for signature, degree(s), medical school, graduation year, `current_role_phrase` (e.g., "a research fellow at X"), US training status (USMLE steps, ECFMG, any US residency), visa status/need (category + free text, shown factually, never interpreted), earliest start date, desired duration, preferred US states (optional), signature block.
-- **Preferences:** funding requirement (`paid only` / `paid preferred, unpaid acceptable` — pilot default is the latter), subspecialty interests (default: all), research interests, methods/skills offered, tone preference (e.g., formal / warm-formal / concise).
+- **Preferences:** funding requirement (`Exclude explicitly unpaid opportunities; unknown funding allowed` / `paid preferred, unpaid acceptable` — pilot default is the latter; the first option was formerly mislabelled "paid only", C1), subspecialty interests (default: all), research interests, methods/skills offered, tone preference (e.g., formal / warm-formal / concise).
 - **CV:** PDF versions with SHA-256.
 - **Publications:** imported from PubMed by name and/or ORCID; the applicant confirms each.
 - **Other:** "recent news" field (used only in Email 3); do-not-contact list.
 
 ### Facts
-Each `profile_fact` is `proposed` or `confirmed`, with a profile version. **Only confirmed facts can appear in drafts.**
+Each `profile_fact` is `proposed` or `confirmed`, with its own version (incremented on every change) and a provenance (`applicant_entered`, `ai_extracted`, `imported`). **Only confirmed facts can appear in drafts.**
+- Manual facts are confirmed only through an explicit **Save and confirm** action, with provenance `applicant_entered`. Autosave never confirms a proposed fact. AI-extracted and externally imported facts require applicant confirmation. Self-reported qualifications are never labelled externally verified (C2).
+- Approvals record the exact fact versions and profile fields they use, so an edit invalidates only the approvals that depend on it (B18, §9.1).
 
 ### AI input rules
 1. **CV extraction (optional, separately consented).** Extract text locally. The applicant reviews it and can redact before any Claude request. Only the selected text is sent. Results are `proposed` facts. Manual fact entry without AI must always be available. The wizard validates the Claude credential **before** this step.
@@ -176,7 +190,7 @@ Discovery is applicant-triggered, runs in the background with progress, is resum
 - **Never generate guessed addresses.**
 
 ### Time zone
-Derive the IANA zone from the institution city/state. If it is ambiguous (multi-zone states, missing city), **scheduling is blocked** until the applicant verifies it. The applicant's zone is never a fallback.
+Derive the IANA zone from the institution city/state. If it is ambiguous (multi-zone states, missing city), **approval and scheduling are blocked** until the applicant verifies it (B20). The applicant's zone is never a fallback.
 
 ---
 
@@ -190,7 +204,7 @@ Shown as separate dimensions, never one score:
 - **Appointment funding:** `Paid – explicitly documented` / `Unpaid – explicitly documented` / `Unknown`. A posting proves an opening, not compensation; compensation must be explicitly stated. Do not assume an observership is an unpaid research appointment.
 - **Research funding evidence (separate field):** `Active grant evidence` with source and dates, or none. It can raise priority but never clears the funding-unknown flag or implies salary availability.
 
-Honor `paid only` by excluding non-paid appointments from drafting (they remain visible, with the reason). Default sort: appointment funding (Paid > Unknown > Unpaid), then grant evidence, fit, and contact quality. One-line summary per candidate, e.g., *"Strong methods match (OCT image analysis). Current role verified. No opening verified. Appointment funding unknown; active NEI grant evidence."*
+Honor `Exclude explicitly unpaid opportunities; unknown funding allowed` by excluding **explicitly unpaid** appointments from drafting (they remain visible, with the reason). Unknown funding stays eligible and marked. Neither grant evidence nor a listing without stated compensation makes an appointment explicitly paid (C1). Default sort: appointment funding (Paid > Unknown > Unpaid), then grant evidence, fit, and contact quality. One-line summary per candidate, e.g., *"Strong methods match (OCT image analysis). Current role verified. No opening verified. Appointment funding unknown; active NEI grant evidence."*
 
 ---
 
@@ -198,11 +212,13 @@ Honor `paid only` by excluding non-paid appointments from drafting (they remain 
 
 ### 8.1 Default templates (editable in Settings)
 
+Body templates are editable; the subject is fixed from the specialty config (exact en dash, one normalized `Re:` prefix for Emails 2–4) and is not editable (C5). Bodies are **plain text** with no tracking; applicant-approved professional URLs (e.g., ORCID or a publications profile) are allowed. There is no automatic quoting of earlier messages in v1 (B15). Emails 1 and 4 always carry the CV attachment, frozen in the approved snapshot (C5).
+
 **Email 1. Subject:** `Research Position Application – {specialty_display_name}`
 ```
 Dear {salutation},
 
-My name is {name}, and I am {current_role_phrase}. I am writing to ask whether your group expects an opening for a research fellow or similar position starting {availability}.
+My name is {full_name}, and I am {current_role_phrase}. I am writing to ask whether your group expects an opening for a research fellow or similar position starting {availability}.
 
 {personalized_sentence}
 
@@ -220,10 +236,10 @@ Best regards,
 ```
 Dear {salutation},
 
-I am following up briefly on my note below about research fellow opportunities in your group. Your work on {pi_topic} remains of strong interest to me, and I would welcome any guidance on openings.
+I am following up briefly on my earlier email about research fellow opportunities in your group. Your work on {pi_topic} remains of strong interest to me, and I would welcome any guidance on openings.
 
 Best regards,
-{name}
+{signature_name}
 ```
 
 **Email 3** (reply in thread)
@@ -235,7 +251,7 @@ I am writing once more in case my earlier email was missed. {optional_update}
 If there is no opening at present, I would be grateful if you could suggest a colleague who may be recruiting.
 
 Best regards,
-{name}
+{signature_name}
 ```
 
 **Email 4** (reply in thread, with CV attached)
@@ -247,7 +263,7 @@ I am reaching out a final time about research opportunities in your group. I hav
 Thank you for your consideration.
 
 Best regards,
-{name}
+{signature_name}
 ```
 
 ### 8.2 Field rules
@@ -257,11 +273,16 @@ Best regards,
   - `funding_line`: empty by default; never volunteers unpaid willingness unless the applicant enters it.
   - `optional_update`: only from "recent news"; the line is removed if empty.
   - `cv_phrase`: "my updated CV" **only** if the attached version is newer than the one sent in Email 1, otherwise "my CV".
+  - `full_name`: the applicant's full name (Email 1 introduction) (C3).
+  - `signature_name`: the applicant's explicit signature-name preference for the closings of Emails 2–4, defaulting to the full name; never an automatically derived informal first name (C3).
+  - `availability`: Month YYYY from the confirmed earliest start date; the duration is included only when confirmed. A date or duration is never invented (C3).
 - The model must not claim the applicant read a paper, imply the PI is recruiting without a posted opening, invent qualifications, or add unverified updates.
 - The review screen shows each claim next to its supporting excerpt and source link/date. Citations never appear in the outgoing email.
+- **Applicant edits (C4):** evidence links stay only on claims they still support. An edited claim is marked applicant-written/review-required until the applicant confirms it; a stale evidence-verified badge never stays attached to changed text. Whole-body editing never changes the recipient or subject.
 
 ### 8.3 Validation (runs on AI output **and again on the final applicant-edited text**)
-- Every cited evidence ID exists, **belongs to this PI**, and is relevant to the field. Every cited fact ID belongs to this applicant, is `confirmed`, and is from the current profile version. Fields match their schema and length limits. Any failure means no draft and an error is shown.
+- Every cited evidence ID exists, **belongs to this PI**, and is relevant to the field. Every cited fact ID belongs to this applicant, is `confirmed`, and its cited version is that fact's current version (B18).
+- Revalidation of applicant-edited text reruns the deterministic checks only. The final edited email is **never** sent back to the AI for validation or restyling (C4). Fields match their schema and length limits. Any failure means no draft and an error is shown.
 - Blocking checklist:
   - No `{` or `}` remains.
   - Salutation present; PI name and institution correct.
@@ -281,8 +302,15 @@ Best regards,
 Approval binds a snapshot containing: campaign ID, step, mode, connected sender account (primary Gmail identity; no send-as aliases), exactly one `To` (no Cc/Bcc in v1), intended recipient (and actual recipient in transport_test), normalized subject, fully rendered body, attachment file bytes + SHA-256 + version, and thread ID / Message-IDs for follow-ups. The SHA-256 of the canonical snapshot is stored.
 
 - **Frozen:** the latest CV is never substituted, the signature never changes, personalization is never regenerated, and the recipient/sender never change. Any relevant change → `needs_reapproval`.
-- A new CV upload offers to re-draft **unsent** messages; it never alters approved ones.
-- Each queued approval has a **Cancel / revoke** action.
+- **Relevant change = an actual dependency (B18).** Approval records the dependencies the message actually uses: each cited fact and its version, the signature and role-phrase fields, the recipient address and its send-ready status, the salutation, the institution time zone, the sender account, and the attachment versions. Changing any of these while the message is unsent and approved → `needs_reapproval`. Unrelated edits do not invalidate it. Changing the message's own body or attachment always requires re-approval.
+- **CV versions (B19):** uploading a new CV never changes or invalidates an attachment already frozen in an approved snapshot. The UI shows the queued version and offers revoke/re-draft. Unapproved drafts may be re-drafted. Replacing the attachment **of that specific message** invalidates its approval.
+- **Approval prerequisites (B20):** a verified time zone, a send-ready exact recipient (live: the campaign's verified PI address; transport_test: an allowlisted address), and a reviewed salutation. Role/affiliation uncertainty and eligibility/funding flags are shown honestly. These mutable prerequisites are rechecked at dispatch (§9.6).
+- **Transport-test schedule override (B2):** only in `transport_test`, and only after explicit P0.3 authorization, a snapshot may bind an override (window always open and/or shortened follow-up intervals). The snapshot then visibly records the override, the actual allowlisted recipient, the fake PI identity, and the shortened timing. The real gateway, approval, exact-recipient checks, uncertainty handling, the shared real-send budget, and pacing still apply. Live mode rejects any snapshot that carries an override. There is no global "always open" setting.
+- Each queued approval has a **Cancel / revoke** action:
+  - **Revoke:** an approved, unclaimed message returns to `awaiting_approval`; reservations and the slot are kept.
+  - **Cancel (Email 1, unsent):** see §3 (B3).
+  - **Stop this follow-up sequence:** see §3 (B5).
+  - Neither action recalls a claimed message or clears an `uncertain` attempt (§9.6).
 
 ### 9.2 Buttons and expectations
 - Labels: **Approve and queue** (outside the window) or **Approve and send** (inside the window).
@@ -293,20 +321,30 @@ Approval binds a snapshot containing: campaign ID, step, mode, connected sender 
 - Store `due_at` (UTC), `eligible_window_start/end` (UTC), the PI's IANA zone, and `sent_at` (UTC) separately.
 - Steps 2 and 3: due = previous `sent_at` + 7×24 h.
 - Step 4: compute in the PI's IANA zone as previous `sent_at` + 1 calendar month, clamped to the end of the month (Jan 31 → Feb 28/29). Convert to UTC. Handle DST correctly.
+- Step 4 with the N-day setting (C8): the same local wall-clock time N **calendar days** later in the PI's IANA zone, converted to UTC. DST handling for both step-4 modes: a local time that does not exist (spring-forward gap) moves forward by the length of the gap; an ambiguous local time (fall-back) uses its first occurrence. Steps 2 and 3 remain exactly 7×24 h.
+- `sent_at` is the established actual submission time, with its provenance (gateway response, Gmail reconciliation, or applicant-reported). It is never replaced by a later reconciliation time; uncertain timestamp evidence requires review, not an invented timestamp (B13).
+- In `transport_test` only, an approved schedule override (§9.1, B2) may shorten the intervals for that campaign.
 - When a step becomes due, its draft is generated and placed in `awaiting_approval`. Only the **next** step is ever generated.
 - Show the original due date and the window it will be sent in.
 - **Optional blackouts (off by default):** US federal holidays and a Dec 20–Jan 5 range, both configurable. When enabled, they defer the eligible window; history and due dates are never rewritten.
 
 ### 9.4 Window, pacing, and recovery
-- A message never **starts** sending at or after 11:00 PI local time.
+- A message never **starts** sending at or after 11:00 PI local time. If preflight crosses 11:00, nothing is submitted (B10).
 - Within a window, sends are spaced 2–6 minutes apart (random) and limited by caps. Deferral for caps or pacing during normal operation rolls to the next valid window automatically, with no catch-up bursts.
-- **Missed-window rule (proposed default):** if a message's assigned window passed while the worker was unavailable (no heartbeat covering the window), the message goes to `needs_reapproval`. Messages whose window hasn't passed remain queued. Ordinary restarts preserve approvals.
+- **Pacing ledger (B8):** spacing is serialized and persisted across actual Gmail submissions in both `live` and `transport_test`, regardless of the PI's time zone. Sandbox uses its own simulated clock and pacing. A restart or mode switch never resets real-send spacing. A transport-test override never bypasses pacing.
+- **Missed-window rule (B7):** re-approval (`needs_reapproval`, campaign `paused_review(missed_window)`) is required only when an assigned eligible window passes with **no functioning dispatch/safety evaluation** of the message during the portion in which it could have been considered, because the worker or required connectivity/sync was unavailable.
+  - The relevant portion starts at the later of the window start and the approval time. It excludes deliberate persistent-pause intervals and intervals when another mode was active.
+  - Every evaluation is recorded with its outcome and deferral reason. It counts as *functioning* only if the worker ran with valid Gmail authorization and a current sync. A process heartbeat alone is not proof of Gmail coverage.
+  - Missing or untrustworthy evaluation evidence requires review. A successful check is never fabricated.
+  - Ordinary brief restarts, pacing/cap deferrals, deliberate persistent pause, and deliberate mode switches do not by themselves invalidate approval; such messages roll to the next eligible window.
+  - Messages whose window hasn't passed remain queued.
+- **Modes (B9):** one mode is active for dispatch and follow-up generation. Switching mode is an intentional pause, not a missed-window event, and dispatch resumes only when the applicant explicitly resumes it for the selected mode. Switching never changes a stored message's mode.
 - **Startup / resume / network recovery:**
   1. Reconcile any `sending`/in-flight attempts (§9.6).
   2. Complete the Gmail sync (§10).
   3. Apply the missed-window rule.
   4. Only then resume dispatch.
-- **Persistent pause** survives restarts.
+- **Persistent pause** survives restarts and continues until explicitly resumed.
 
 ### 9.5 Worker priorities
 The tray worker processes in this order:
@@ -324,33 +362,46 @@ Slow discovery or AI work never delays Gmail safety checks or dispatch. A heartb
 
 1. **Preflight** (no DB lock held across network):
    - Gmail token valid and the scopes and account match the snapshot.
-   - Sync is current with no unresolved gap.
+   - An **incremental sync completes immediately before sending**. Any unresolved mailbox-level coverage gap blocks **all** real sends. A proven thread-specific problem pauses only that campaign; a mailbox or credential failure is never labelled thread-specific (B10).
    - **For follow-ups:** refresh the exact campaign thread and messages from the PI's known addresses since the last send.
-   - **For Email 1:** check prior-contact records and Gmail metadata for messages to/from the PI's addresses. Any hit → `paused_review(prior_contact_found)`. A bounded scan does not prove no prior contact; the UI says so.
-   - Mode/recipient validation: live = the campaign's verified PI address only; transport_test = allowlist only; sandbox = fake transport only.
+   - **For Email 1 (B14):** reconcile the app's own attempts first. Then check prior-contact records and search Gmail metadata for messages to/from the PI's exact known addresses, with full pagination for the declared scope, spam/trash included, and drafts excluded. IDs may locate hits; only minimal permitted metadata and an *Open in Gmail* action are shown, never bodies or snippets.
+     - Any unacknowledged hit → `paused_review(prior_contact_found)`.
+     - The applicant either **acknowledges these reviewed messages and proceeds**, or **closes**. Acknowledgment is scoped to the mailbox, the campaign, and the exact Gmail IDs reviewed. It never ignores future mail from that PI, bypasses do-not-contact, or permits a duplicate app sequence. New unacknowledged hits trigger review again.
+     - An incomplete search is not a clean result: dispatch is deferred.
+     - A bounded scan does not prove no prior contact; the UI says so.
+   - Mode/recipient validation: live = the campaign's verified PI address only; transport_test = allowlist only; sandbox = fake transport only. Live rejects any transport-test override (B2). The recipient's send-ready status, the verified time zone, the reviewed salutation, and do-not-contact status are rechecked (B20).
    - Window, pause, and caps.
    - Log the check time.
 2. **Atomic claim** (one short transaction):
+   - After the network preflight, **re-read** the current message, approval snapshot, campaign stop/review status, active mode, persistent pause, do-not-contact status, reservations, and budget. A reply, revocation, cancellation, pause, or mode switch recorded during preflight prevents submission (B10).
    - Conditionally move the message `approved_queued → sending` only if it is still `approved_queued` and the snapshot hash matches.
+   - Recheck the due time, the applicable window (including the 11:00 limit), and pacing at this point. This claim is the final authorization immediately before Gmail is invoked (B10).
    - Validate or consume the campaign's existing reservation (§11).
    - Reserve the 24-hour budget.
    - Insert a `send_attempt` (status `in_flight`) holding the attempt ID, app Message-ID, `X-Marcelorian-Id`, mode, sender, recipient, and snapshot hash.
    - A unique partial index allows only one unresolved attempt per message.
-   - Commit.
-3. **Submit:** build MIME from the snapshot bytes only and call `messages.send` once, with no retries.
-4. **Definite success:** in one transaction, mark the attempt and message `sent`, store the Gmail message and thread IDs, transition the campaign, record budget usage, and compute the next `due_at`. **Commit before** any export or Sheet work; export failure never causes a resend.
+   - Commit. **This commit is the documented point beyond which recall is not promised.** Cancellation and claim are serialized: a cancellation committed before it prevents submission; one committed after it is recorded as a stop request, and the attempt is reconciled (B5, B10).
+3. **Submit:** build MIME (plain text) from the snapshot bytes only and call `messages.send` once, with no retries. The MIME is built before the claim, so only an in-memory hand-off separates the claim commit from the call.
+   - **Identifiers (B12):** the RFC Message-ID is a unique opaque value at the verified sender's email domain, never the laptop hostname. A distinct value is used for each separately authorized attempt, kept throughout that attempt's reconciliation, and never regenerated because a search returned nothing.
+   - `X-Marcelorian-Id` carries an opaque value with no applicant name, file path, or other personal data. It is a visible correlation header, not a secret or credential.
+   - Message-ID is useful evidence, not a provider idempotency guarantee.
+4. **Definite success:** in one transaction, mark the attempt and message `sent`, store the Gmail message and thread IDs, transition the campaign, record budget usage, and compute the next `due_at`. **Commit before** any export or Sheet work; export failure never causes a resend. A success that arrives after the campaign moved to `conversation` or `closed` is recorded without overwriting that newer state (B13).
 5. **Definite rejection** (Gmail error proving non-acceptance): mark `failed_definite`, release the budget and the attempt, and show the error. Re-approval is required to try again.
 6. **Ambiguous** (timeout, connection loss, 5xx, crash): reconcile.
    - Search Sent by `rfc822msgid:` and corroborate by recipient, time, and thread.
-   - Found → `sent`.
+   - Found → `sent`, using the established actual submission time (§9.3).
    - Not found or search failed → `uncertain`, with the reservation and budget **held** and the campaign moved to `paused_review(send_uncertain)`. **"Not found" alone never makes the message eligible for retry.**
    - The applicant resolves it explicitly and auditably as: confirmed sent / evidence of definite non-submission (re-approval required) / still unresolved.
+   - **Resolution rules (B13):**
+     - The budget hold is released only when definite non-submission is supported and recorded, never because a Sent search is empty.
+     - Resolving the attempt never forces the campaign to `outreach_pending` and never restarts a stopped sequence. A reply, do-not-contact instruction, closure, or other unresolved review reason that arrived meanwhile stays in effect.
+     - Pending capacity is retained only when the current campaign still requires it.
 7. **Crash after Gmail accepted but before the commit:** on startup, an `in_flight` attempt goes through reconciliation (step 6), never a fresh send.
 
-Verify in P0 that Gmail preserves the custom Message-ID and header; if it does not, correlate using the returned IDs and metadata and document the behavior.
+Verify in P0.3 that Gmail preserves the custom Message-ID and `X-Marcelorian-Id` header, using metadata only (never bodies or raw data). If it does not, correlate using the returned IDs and metadata and document the behavior.
 
 ### 9.7 Threading
-Follow-ups use the original campaign `threadId`, set `In-Reply-To` and `References` from the actual RFC Message-IDs, and use one subject chain (`Re: Research Position Application – Ophthalmology`). Never merge distinct PIs because they share a subject. Test the en-dash subject and `Re:` normalization on real accounts in P0.
+Follow-ups use the original campaign `threadId`, set `In-Reply-To` and `References` from the actual RFC Message-IDs, and use one subject chain (`Re: Research Position Application – Ophthalmology`). Earlier messages are not quoted automatically (B15). Never merge distinct PIs because they share a subject. Test the en-dash subject and `Re:` normalization on real accounts in P0.3.
 
 ---
 
@@ -362,28 +413,31 @@ Follow-ups use the original campaign `threadId`, set `In-Reply-To` and `Referenc
 ### Metadata only
 Use `format=metadata` with an explicit `metadataHeaders` allowlist and a `fields` mask that excludes `snippet`, payload bodies, and attachments.
 
-Header allowlist: From, To, Cc, Date, Subject, Message-ID, In-Reply-To, References, Auto-Submitted, X-Autoreply, X-Autorespond, Precedence, Content-Type.
+Header allowlist: From, To, Cc, Date, Subject, Message-ID, In-Reply-To, References, Auto-Submitted, X-Autoreply, X-Autorespond, Precedence, Content-Type, X-Marcelorian-Id (B12; needed for the P0.3 preservation test and reconciliation).
 
 **Never request** `full` or `raw`, and never fetch attachments. The applicant opens Gmail to read the content.
 
 ### History sync
 - Use the `history` API. Persist the cursor **only after every page in the range has been processed**.
 - If the cursor is expired or invalid: reconcile **all tracked campaign threads and known contact addresses** from the last fully covered timestamp, paginating fully and including spam/trash where the API permits. A fixed "last N days" query is not acceptable.
-- Sending stays **blocked** (`sync_gap`) until the gap is closed.
+- Sending stays **blocked** (`sync_gap`) until the gap is closed. A mailbox-level gap blocks all real sends; it is not recorded as a per-campaign problem unless one campaign's thread is proven to be the cause (B10).
 - Record `last_gmail_coverage_at`. It advances only after a full successful sync.
+- **Mailbox scope (B9, C9):** synchronization and reconciliation run for **all** real (`live` and `transport_test`) campaigns of the connected mailbox, including those of the inactive mode, whenever authorization permits. The single mailbox-level cursor/coverage record advances only when the full relevant range has been processed for both real modes. Inbound events and their state effects stay with the correctly matched campaign and its mode.
 
 ### Matching
 - Match using thread ID, exact known contact identities, and `References`/`In-Reply-To`.
 - **Never** match by subject or university domain alone.
 - A thread mapping to several campaigns → pause all of them for review.
 - An unknown participant or new address in a tracked thread → `paused_review(unknown_participant)` until the applicant confirms the relationship.
+- A possible reply from a known PI address in a **new** thread → `paused_review(ambiguous_thread)` for applicant confirmation; it never frees capacity automatically (B11).
+- In `transport_test`, the actual allowlisted recipient stands in for the PI **only inside that campaign's transport_test mapping**. Test addresses are never promoted into live contact identities (B11).
 - Ignore the app's own sent messages by stored Gmail IDs.
 
 ### Classification (rule-based heuristics, not proof)
 - **Possible delivery report** (`mailer-daemon`, `postmaster`, or `multipart/report; report-type=delivery-status`): `paused_review(delivery_notice)`. The slot is **held**. The applicant checks Gmail and confirms one of: bounce/invalid address (→ `closed: bounce_confirmed`, address invalid), delay/other (resume), or policy rejection (closed, address **not** marked invalid). Do not fetch bodies to decide.
 - **Auto-reply** (`Auto-Submitted` ≠ `no`, `X-Autoreply`, `X-Autorespond`, `Precedence: auto_reply|bulk|junk`, or subject patterns like "Out of Office" / "Automatic reply"): `paused_review(auto_reply)`. The slot is held. The applicant sets a resume date or closes. A resolved event is stored and never re-pauses the campaign.
 - **Message from the applicant in the thread not sent by the app:** `paused_review(manual_applicant_message)`.
-- **Clearly matched non-automatic message from the PI's known identity:** genuine reply. Stop the sequence, cancel queued and not-yet-generated future messages, set `conversation`, free the slot, and send a toast.
+- **Clearly matched non-automatic message from the PI's known identity in the campaign thread:** genuine reply. Stop the sequence, cancel queued and not-yet-generated future messages, set `conversation`, free the slot, and send a toast. An already-claimed attempt is not recalled; it is reconciled, and its budget hold and contact-ledger entry remain until resolved (B13).
 - **Anything doubtful:** pause and hold the slot.
 - Replies after `sequence_complete` still update the campaign.
 
@@ -391,26 +445,40 @@ Header allowlist: From, To, Cc, Date, Subject, Message-ID, In-Reply-To, Referenc
 Positive / Requests info / No opening / Referral / Contact later (date) / Do not contact.
 
 - **Referral** and **Contact later** create manual `task`s. The applicant enters the referred person's details; the app never claims to extract them.
-- **Do not contact** adds the PI to the do-not-contact list.
+- **Do not contact** adds the PI to the do-not-contact list. A simulated reply tag in sandbox (or a transport_test tag on a synthetic PI) affects only that mode's scope and never edits the live list (C7).
 
 ### Known limit
-The final preflight reduces but cannot eliminate the race with a reply arriving just before submission. The UI and docs state this.
+The final preflight reduces but cannot eliminate the race with a reply arriving just before submission. The atomic claim (§9.6 step 2) is the last check; a genuinely new reply arriving after it cannot stop that submission. The UI and docs state this.
 
 ---
 
 ## 11. Caps, reservations, and budgets
 
-All counts are per mode, except the real-submission budget.
+All counts are per mode, except the real-submission budget and pacing ledger, which `live` and `transport_test` share; `sandbox` has its own (B8, B17, C9).
 
 - **Pending slots** (institution ≤ 2, lab group ≤ 1): a campaign holds a slot while in `outreach_pending` or `paused_review`.
   - **Approving Email 1 atomically reserves** the institution and lab slots and the projected 30-day contact.
   - At dispatch, the gateway **validates the campaign's existing reservation** without double-counting. A campaign occupying the last allowed slot can send.
   - Follow-ups never acquire new slots or count as new contacts.
-- **Rolling 30-day new contacts** (≤ 3 per institution): count successful Email 1 `sent_at` timestamps plus reserved-but-unsent Email 1s (projected). The final check happens at dispatch. Replies or completion never erase history.
-- **Rolling 24-hour budget** (≤ 25): counts every real Gmail submission by the app (live + transport_test, including reminders), plus `in_flight` and `uncertain` attempts (held conservatively until resolved). Sandbox sends use a separate logical budget. These limits do not count mail the applicant sends manually and do not replace Google's own limits.
+  - Reservations already owned survive `failed_definite` and `needs_reapproval` of Email 1 until re-approval or explicit cancellation/closure; re-approval validates the existing reservation instead of creating a second one (B4).
+- **Rolling 30-day new contacts** (≤ 3 per institution): count successful Email 1 `sent_at` timestamps plus reserved-but-unsent Email 1s (projected). An Email 1 whose attempt is `in_flight` or `uncertain` stays counted. The final check happens at dispatch. Replies or completion never erase history.
+- **Rolling 24-hour budget** (≤ 25): counts every real Gmail submission by the app (live + transport_test, including reminders, i.e. Emails 2–4), plus `in_flight` and `uncertain` attempts (held conservatively until resolved). Sandbox sends use a separate logical budget. These limits do not count mail the applicant sends manually and do not replace Google's own limits.
+  - **Each attempt counts once (B17):** an in-flight hold converts to sent usage at the established submission time; it is never hold plus usage.
+  - Definite non-acceptance releases the hold. Uncertainty keeps it until definite non-submission is supported and recorded (B13).
+  - A lowered 24-hour budget can defer follow-ups as well as initials.
 - **Concurrency:** reservations happen in transactions so parallel approvals/sends can never oversubscribe.
-- **Boundaries:** exactly 24 h and 30 days, inclusive/exclusive as defined in code and tested.
-- **Lowering a limit or merging groups below current occupancy:** keep history, block new reservations, show "over capacity," and never cancel existing conversations or double-count.
+- **Boundaries:** an event at time `t` counts in a rolling window of length `W` evaluated at `now` iff `now − W < t ≤ now`. An event exactly 24 h (or exactly 30 days) old no longer counts. Held budget entries count regardless of age until resolved. Tested in code.
+- **Lowering a limit or merging groups below current occupancy (B6):** keep history, block new reservations, show "over capacity," and never cancel existing conversations or double-count.
+  - New limits apply to new initial submissions, **including** initials that are reserved but not yet submitted. They are not silently grandfathered: their approvals and records are kept, but they are marked `over_capacity` and blocked at dispatch.
+  - The UI explains that this can need applicant action: cancel an excess unsent campaign, restore the limit, or wait for an already-contacted campaign to release capacity. It does not claim that rolling to another window will resolve it.
+  - Example (required test): two reserved but unsent initials under a newly lowered limit of one may both be blocked. Cancelling either releases its reservations and permits the other. There is no hidden permanent lock and no automatic cancellation.
+  - Existing follow-ups need no new pending or new-contact slot. They still obey the current 24-hour budget, pacing, windows, approval, and reply checks.
+  - A cap-only deferral is never a missed-window/re-approval event (§9.4).
+- **Adjustable limits (B16):** defaults are 25 real submissions per rolling 24 hours, 2 pending per institution, 1 per lab, and 3 new contacts per institution per rolling 30 days.
+  - There are no hardcoded ceilings. Values must be finite, sensible integers.
+  - Any increase above a default needs explicit warning/confirmation and is audited.
+  - Pacing stays positive (default 2–6 minutes, minimum ≤ maximum).
+  - No setting can disable approval, recipient validation, uncertainty handling, or reply checking. Debug settings are impossible in live mode.
 - **Lab conversation warning:** before reserving a slot for a PI in a lab group with a `conversation`, show its status; the applicant must confirm.
 - **Optional stricter setting (off by default):** hold the slot 14 days after Email 4.
 - Caps apply to this applicant's local records only.
@@ -421,11 +489,16 @@ All counts are per mode, except the real-submission budget.
 
 1. **Automated tests:** fake Gmail transport + injected clock. No network.
 2. **`sandbox` mode:** the full workflow runs on an isolated dataset with the **same** caps, states, scheduling, approvals, and gateway, using a fake transport. Buttons simulate PI reply / auto-reply / delivery notice / manual applicant message. It does not consume live capacity because its records are isolated, not because checks are disabled.
+   - **Simulated time (C6):** sandbox uses an injected simulated clock with an advance-time control, so the real timing and state rules run instead of a separate simplified scheduler.
+   - **Canned drafts (D5):** sandbox may use clearly labelled canned synthetic drafts, so practice and tests need no AI spending. They are not validated AI output and are never live-send-ready. No credentials are needed for offline or canned sandbox practice.
 3. **`transport_test` mode:** real Gmail, but every To address is validated against an **explicit allowlist** of consenting test addresses (e.g., the applicant and the owner). The intended PI and the actual test recipient are both recorded. Any test banner is part of the approved snapshot. A self-send tests connectivity only; a reply from a **second** controlled address is required to test real reply classification and cancellation.
+   - **Allowlist rules (B11):** known real-PI addresses are rejected from the allowlist. Only one transport_test campaign may be active per actual allowlisted recipient. The test address stands in for the PI only inside that campaign's transport_test mapping and is never promoted into a live identity.
+   - **Schedule override (B2):** an explicit, approved, snapshot-bound override (§9.1) is the only way to shorten intervals or open the window, and it exists only in transport_test.
 
 **Mode switching:**
-- Pauses the worker and requires explicit confirmation.
-- Nothing crosses modes: no test-approved message, debug schedule (shortened intervals are allowed only in sandbox/transport_test), or test thread ever becomes live.
+- Pauses the worker and requires explicit confirmation. It is an intentional pause, not a missed-window event. Dispatch resumes only when explicitly resumed for the selected mode (B9).
+- Nothing crosses modes: no test-approved message, schedule override (transport_test only, §9.1; sandbox uses its simulated clock), or test thread ever becomes live. Switching never changes a stored message's mode.
+- Gmail sync and reconciliation continue for inactive-mode real campaigns (§10, B9).
 - Converting a candidate to live creates a fresh live campaign with fresh approval and duplicate-contact checks.
 
 The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox behavior. It does not need 80–120 real test emails. Turning live mode on requires completing a **Live readiness checklist** (P0 transport checks passed, Gmail reconnect tested, consent set, caps reviewed).
@@ -444,6 +517,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 **`email_log.csv`** (one row per logical message and attempt): message_id, campaign_id, mode, step, approval_version, snapshot_hash, intended_recipient, actual_recipient, subject, body (exact approved text, escaped as above), attachment name/version/SHA-256, approved_at, attempt_id, app_message_id, x_marcelorian_id, sent_at, gmail_message_id, gmail_thread_id, outcome (sent / failed_definite / uncertain / cancelled), error.
 
 ### Owner report (Google Sheet)
+- The owner report covers **live** mode only by default (C9).
 - **Consent** is separate from the Gmail connection and optional.
 - The Sheet is created in the **applicant's** Drive with the `drive.file` scope. That scope covers app-created or explicitly authorized files, not "only one file," so the app stores the report spreadsheet ID and restricts **all** report operations to that ID. Shared with the owner as **Viewer**; the applicant remains the owner. No public sharing, no service account.
 - **Default column allowlist:** campaign_id, pi_name, institution, institution_state, subspecialty, appointment_funding, unpaid_flag, funding_unknown_flag, grant_evidence, campaign_state, pause_reason, email1–4 sent_at, reply_detected, reply_tag, next_action, next_due_at, cap_block_reason. A header block shows `last_gmail_coverage_at` and `last_successful_sheet_sync_at`; failed syncs do not advance these.
@@ -485,7 +559,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 
 1. **Setup wizard:**
    1. Welcome + slogan
-   2. Claude key (validate model access)
+   2. Claude key (credential/model-access validation via metadata lookup, no generation request; D3)
    3. Profile
    4. CV upload → optional consented AI extraction (review/redact first) or manual facts → confirm facts
    5. Publications
@@ -507,13 +581,14 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
    - Checklist results and the "applicant review is the final factual check" note.
    - Inline edit; edits trigger revalidation.
    - Approve and queue / Approve and send, with expected time in both zones.
-   - Reject (with reason) and Cancel.
+   - Reject (with reason), Revoke, Cancel (unsent Email 1), and **Stop this follow-up sequence**. The wording states that a claimed message cannot be recalled and that an uncertain attempt is not cleared by cancelling (B3, B5).
+   - Shows the frozen attachment version of a queued message and offers revoke/re-draft after a new CV upload (B19).
 6. **Campaigns:** per-PI timeline (message states, due dates, eligible windows, attempts).
 7. **Replies & reviews:** inbound events and pause reasons to resolve, with links to open in Gmail. No AI summaries.
 8. **Tasks:** referrals, contact-later.
 9. **Posted opportunities:** manual entries, deadlines, formal application route.
 10. **Settings:**
-    - Caps, window, pacing, last-interval mode.
+    - Caps, window, pacing, last-interval mode (increases above defaults need explicit confirmation and are audited; B16).
     - Optional blackouts (off), optional 14-day hold (off).
     - Model, templates, tone.
     - Institution/lab grouping, time-zone overrides.
@@ -526,7 +601,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 ## 17. Packaging, distribution, and guides
 
 - PyInstaller onedir + Inno Setup. Per-user install, no admin. Start menu and desktop shortcuts. Optional Startup entry for the tray (consented in the wizard).
-- Bundle pinned dependencies, `tzdata`, templates, specialty config, Alembic migrations, and the **Desktop OAuth client config**. Installed-app client IDs are not confidential mailbox credentials, but keep the config out of the public repo and inject it at build time from a GitHub secret.
+- Bundle pinned dependencies, `tzdata`, templates, specialty config, Alembic migrations, and the **Desktop OAuth client config**. Installed-app client IDs are not confidential mailbox credentials (the config is not a mailbox access token and is never described as one), but keep the config untracked in every repository, public or private, and inject it at build time from a GitHub secret (A4).
 - **Never bundle** refresh tokens or the owner's Anthropic key. The key is entered in the wizard and stored in Credential Manager. The docs state plainly that a key used on the tester's laptop cannot be hidden from that laptop's controller; the **provider-enforced spend limit** bounds the owner's exposure.
 - **Updates:** new installer; data in `%LOCALAPPDATA%\Marcelorian\` is preserved; back up, then migrate.
 - **Distribution:** owner-controlled channel (private GitHub release) with a published SHA-256 checksum. The unsigned-build SmartScreen prompt ("More info → Run anyway") is explained as **not** being a safety guarantee. Never instruct disabling Defender or SmartScreen, or bypassing organizational controls.
@@ -548,13 +623,13 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 
 - **P0 — Safe foundation + Gmail spike.**
   1. Repo skeleton, settings, DB with the full campaign/message/snapshot/attempt/reservation/budget model, migrations, keyring, local UI session security.
-  2. Fake transport, recipient allowlist, approval snapshot binding, the **single send gateway** with atomic claim, reconciliation, and the uncertain state. Unit tests.
-  3. **Then, with my explicit go-ahead,** a Windows Gmail spike in `transport_test`: self-send (connectivity); a two-address thread where the second address replies; verify threading, the en-dash subject and `Re:`, Message-ID/header preservation, metadata-only fetch, and history sync.
+  2. Fake transport, recipient allowlist, approval snapshot binding, the **single send gateway** with atomic claim, reconciliation, and the uncertain state. **Also the pure safety rules moved forward from P2 (B1):** window/due-date calculations, calendar-month and N-day handling, blackouts, campaign and message transitions with the pause-reason policy, reservation and cap rules (including cap reduction), the 24-hour budget ledger, pacing, the missed-window rule, and mode isolation. Unit tests with a fake transport and an injected clock. One production gateway throughout; no spike-only sender.
+  3. **Then, with my explicit go-ahead,** a Windows Gmail spike in `transport_test`: self-send (connectivity); a two-address thread where the second address replies; verify threading, the en-dash subject and `Re:`, Message-ID/`X-Marcelorian-Id` preservation (metadata only), metadata-only fetch, and history sync. A small owner-assisted Windows spike launcher and plain-language runbook are prepared for this gate (not the P5 installer). The operator, Windows build, sender, second consenting test address, and OAuth client configuration are collected on the local test machine at the gate, never assumed and never committed. Synthetic message content only; never the applicant's real CV (A3).
 
   No real PI contact. Report untested items. Do not declare the 7-day token survival passed until 7+ days have actually elapsed.
 - **P1 — Profile and discovery.** Wizard steps through publications; consented CV extraction and manual facts; PubMed, OpenAlex (API key), RePORTER, seed-URL faculty pages (optional ClinicalTrials.gov); identity/affiliation/email/tz verification; evidence; assessment; candidates UI.
-- **P2 — Drafting, review, and rules.** Templates, LLM fill + validation, the approval queue, and the pure scheduling/caps/reservation/state logic with full tests. Sandbox mode end to end. Reuse the P0 gateway; no temporary sender.
-- **P3 — Automation.** Tray worker, dispatcher priorities, windows and pacing, missed-window/restart/sleep/resume recovery, history sync with gap recovery, inbound classification, the reviews and tasks screens, toasts.
+- **P2 — Drafting, review, and rules.** Templates, LLM fill + validation, the approval queue, and drafting/review integration on top of the P0 scheduling/caps/reservation/state logic (extended with tests as needed). Sandbox mode end to end. Reuse the P0 gateway; no temporary sender.
+- **P3 — Automation.** Tray worker, dispatcher priorities, wiring the P0 window/pacing/missed-window rules into tray automation, restart/sleep/resume recovery, history sync with gap recovery, inbound classification, the reviews and tasks screens, toasts.
 - **P4 — Records and report.** CSVs (atomic, formula-safe, lock-tolerant), consented Sheet with Viewer sharing and revocation, dashboard freshness, cost estimate, backups/restore, delete-all-data.
 - **P5 — Packaging and docs.** Installer, auto-start, CI release with checksum, both guides.
 - **P6 — Acceptance.** All automated tests (§19), plus a separately reported, explicitly authorized live checklist on Windows 11.
@@ -569,22 +644,22 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 3. A campaign holding the last institution slot can still send its own Email 1.
 4. A 3rd pending PI at an institution is blocked; a 4th new contact within 30 days is blocked even with free slots; reminders never count as new contacts; a reply does not erase 30-day history.
 5. Concurrent approvals cannot oversubscribe; exact 24-hour and 30-day boundary behavior.
-6. Lowering limits below occupancy blocks new reservations without cancelling anything; merged groups don't double-count.
+6. Lowering limits below occupancy blocks new reservations without cancelling anything; reserved-but-unsubmitted initials are marked `over_capacity` (not grandfathered); merged groups don't double-count (B6).
 7. An unverified lab suggestion blocks a second same-institution contact until reviewed; the lab conversation warning appears.
-8. Cancelling an unsent Email 1 releases the reservation; revoking a follow-up does not.
+8. Cancelling an unsent Email 1 returns the campaign to `candidate`, keeps the message and audit history, and releases its reservations; it is refused while an attempt is in flight or uncertain; revoking a follow-up does not release the slot (B3, B5).
 
 **Approval and snapshot**
-9. Changing the mode, sender, recipient, body, or CV invalidates the approval.
+9. Changing the mode, sender, recipient, body, or the attachment of that specific message invalidates the approval. Uploading a new CV version does not (B19). Changing a fact or profile field the message uses invalidates it; an unrelated edit does not (B18).
 10. The latest CV is never substituted into an approved message.
-11. A sandbox or transport_test message never becomes live; switching modes pauses the worker.
+11. A sandbox or transport_test message never becomes live; switching modes pauses the worker and never changes a stored message's mode (B9).
 
 **Timing**
-12. Calendar-month math including Jan 31 and DST transitions, computed in the PI zone from the actual `sent_at`.
+12. Calendar-month math including Jan 31 and DST transitions, computed in the PI zone from the actual `sent_at`; the N-day alternative uses calendar days in the PI zone with the documented DST handling (C8).
 13. Due Tuesday, approved Thursday → sent Thursday; the next interval counts from Thursday.
 14. An unknown/ambiguous time zone blocks scheduling.
 15. No send starts at or after 11:00 local.
 16. Pacing; cap deferral rolls to the next window with no burst.
-17. Worker asleep through the assigned window → `needs_reapproval`; an ordinary restart preserves the queue; persistent pause; cancellation.
+17. No functioning evaluation during the considerable portion of the assigned window (worker asleep or sync/connectivity unavailable) → `needs_reapproval`; an ordinary restart, pacing/cap deferral, deliberate persistent pause, or mode switch preserves the approval and rolls the window; approval near a window's end is judged only on the remaining portion; persistent pause; cancellation (B7).
 18. Optional blackouts are off by default; when on, they defer without rewriting due dates.
 
 **Gateway and recovery**
@@ -596,7 +671,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 24. Export failure after a successful send → no resend; stale export indicator.
 
 **Inbound**
-25. A reply arriving before the final preflight cancels the send; the documented race boundary is noted.
+25. A reply arriving before the final preflight cancels the send; a reply recorded during preflight prevents submission at the atomic claim; the documented race boundary is noted (B10).
 26. An acknowledged auto-reply is not reprocessed forever.
 27. An unknown participant pauses the campaign.
 28. An unrelated same-domain email is ignored; the same subject across PIs is never merged.
@@ -615,7 +690,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 
 **Funding and identity**
 39. Grant evidence keeps the appointment funding `Unknown`.
-40. Explicitly paid vs. explicitly unpaid postings; `paid only` excludes non-paid appointments.
+40. Explicitly paid vs. explicitly unpaid postings; `Exclude explicitly unpaid opportunities; unknown funding allowed` excludes explicitly unpaid appointments while unknown funding stays eligible and marked (C1).
 41. An ambiguous author-email attribution is classified C.
 42. A homonym is not auto-merged.
 
@@ -634,6 +709,24 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 52. Local endpoints reject requests without a session, with a bad Origin/Host, or without CSRF; no state-changing GETs.
 53. The SSRF guard blocks private IPs and redirects to them.
 
+**Added by the pre-P0 review (B-decisions; automated, P0)**
+54. Cancellation committed during preflight prevents submission; cancellation after the claim commit is recorded as a stop request, stops future steps, and the attempt is reconciled; a Cancel action never clears an uncertain attempt (B5, B10).
+55. A preflight that crosses 11:00 PI local time does not submit; the message stays approved and rolls to the next window without being treated as missed (B10).
+56. A reply, revocation, persistent pause, mode switch, or do-not-contact entry recorded during preflight prevents submission at the atomic claim (B10).
+57. Concurrent claims (UI approval, scheduler tick, recovery) yield exactly one Gmail call; the unique unresolved-attempt index rejects a second unresolved attempt (B10).
+58. Every held-budget transition: hold → used at the established submission time; hold → released on definite rejection; hold retained while uncertain; uncertain → released only on recorded definite non-submission; uncertain → used on confirmed send; each attempt counted exactly once (B13, B17).
+59. Cap-reduction recovery: two reserved, unsent initials under a newly lowered limit of one are both blocked as `over_capacity`; cancelling either releases its reservations and permits the other; a lowered 24-hour budget defers follow-ups too; a cap-only deferral is not a missed window (B6, B17).
+60. Mode-switch isolation: switching pauses dispatch until explicitly resumed; inactive-mode messages are neither dispatched nor treated as missed; stored modes never change; real-send pacing is not reset (B8, B9).
+61. A delayed send result arriving after a genuine reply is recorded without overwriting `conversation`; the reply freed the pending slot, but the attempt, budget, and contact-ledger entries remain (B13).
+62. Uncertain-send recovery never restarts a stopped or closed campaign and never clears an unrelated pause reason (B13).
+63. A transport-test schedule override is rejected in live (at approval and at the gateway); in transport_test it still obeys pacing and the shared real-send budget (B2, B8).
+64. Prior-contact acknowledgment covers only the exact reviewed Gmail IDs; an incomplete search defers dispatch; a new unacknowledged hit pauses again; drafts are excluded (B14).
+65. RFC Message-IDs use the verified sender's domain (never the hostname), are unique per attempt, and are unchanged through reconciliation; `X-Marcelorian-Id` is opaque (B12).
+66. Production secret storage rejects fail/null/plaintext/unknown keyring backends and never selects the in-memory test store (A3).
+67. Settings increases above defaults require confirmation and are audited; non-finite, negative, or non-positive pacing values are rejected (B16).
+68. Approval is blocked by an unverified time zone, a non-send-ready recipient, or an unreviewed salutation, and the same prerequisites are rechecked at dispatch (B20).
+69. The transport_test allowlist rejects known real-PI addresses and allows only one active campaign per actual test recipient (B11).
+
 **LIVE (Windows 11, transport_test, allowlisted addresses only, explicit authorization)**
 - L1: Self-send; a two-address thread with a reply from the second address; verify threading/subject.
 - L2: Reconnect flow after revoking the token.
@@ -646,17 +739,20 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 
 | Requirement | Enforcing component | Tests |
 |---|---|---|
-| No duplicate execution | Send gateway atomic claim + unique unresolved-attempt index | 19–22 |
-| No blind retry under uncertainty | Gateway reconciliation + `uncertain` state | 21–23 |
-| Exact approved content only | Approval snapshot + hash check at claim | 9–11, 38 |
-| Caps not oversubscribed or self-blocking | Reservation service (transactional) | 3–8 |
-| Stop on reply | Sync + matcher + preflight | 25, 29–31 |
+| No duplicate execution | Send gateway atomic claim + unique unresolved-attempt index | 19–22, 54, 57 |
+| No blind retry under uncertainty | Gateway reconciliation + `uncertain` state | 21–23, 58, 62 |
+| Exact approved content only | Approval snapshot + hash check at claim + dependency invalidation | 9–11, 38, 63, 68 |
+| Caps not oversubscribed or self-blocking | Reservation service (transactional) | 3–8, 59 |
+| Stop on reply | Sync + matcher + preflight + claim re-read | 25, 29–31, 55, 56, 61 |
+| Pacing and windows respected | Claim-time window/due/pacing check + persisted pacing ledger | 15–17, 55, 60, 63 |
 | No missed replies after history expiry | Gap reconciliation + `sync_gap` block | 31 |
 | Conservative bounce handling | Inbound classifier (metadata) + review | 32 |
 | No Gmail content to AI | AI input builder + metadata-only fetch | 33, 37 |
 | Claims grounded in evidence | Draft validator (ownership + confirmation) | 34–36, 38 |
 | Funding labels truthful | Assessment rules | 39–40 |
-| Test traffic never live | Mode partitioning + gateway recipient validation | 11, 43–44 |
+| Test traffic never live | Mode partitioning + gateway recipient validation + allowlist rules | 11, 43–44, 60, 63, 69 |
+| No duplicate prior contact | Prior-contact search + scoped acknowledgments | 64 |
+| Secrets never in plaintext | Secret store backend allowlist | 66 |
 | Correct timing | Scheduler (UTC + IANA, tzdata) | 12–18 |
 | Report is read-only + consented | Report service (allowlisted file ID, RAW) | 47–48 |
 | Audit integrity | Exports (lossless, formula-safe) + backups | 49–51 |
@@ -666,7 +762,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 
 ## 21. Proposed defaults (not previously decided by the owner; implement as settings)
 
-- **Missed-window recovery:** require re-approval when the worker was unavailable for the whole assigned window (§9.4).
+- **Missed-window recovery:** require re-approval only when the assigned eligible window passed with no functioning dispatch/safety evaluation during the portion in which the message could have been considered (worker or connectivity/sync unavailable); deliberate pause, mode switches, brief restarts, and cap/pacing deferrals do not invalidate approval (§9.4, B7).
 - **Blackouts** (federal holidays, Dec 20–Jan 5): available, **off** by default.
 - **Sandbox** is the default mode at first run; live requires the readiness checklist.
 - **Tone preferences** replace AI writing samples.
