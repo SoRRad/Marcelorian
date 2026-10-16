@@ -1,0 +1,31 @@
+# Python / tooling
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+build/
+dist/
+
+# Local data - never commit databases, logs, exports or CVs
+*.db
+*.db-wal
+*.db-shm
+*.log
+exports/
+backups/
+
+# Secrets and per-machine configuration (decision A4: OAuth client config stays untracked)
+client_secret*.json
+credentials*.json
+token*.json
+*.pem
+.env
+.env.*
+
+# Filled-in P0.3 reports stay on the test machine; only the template is committed
+docs/P0_3_REPORT_*.filled.md
+spike-output/

@@ -1,0 +1,14 @@
+:root { --bg: #0d1117; --panel: #161b22; --text: #e6edf3; --muted: #8b949e; --accent: #39d0d8; --warn: #f0883e; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: "Segoe UI", system-ui, sans-serif; }
+.topbar { display: flex; gap: 1rem; align-items: baseline; padding: 0.75rem 1.25rem; border-bottom: 1px solid #30363d; }
+.brand { font-weight: 600; color: var(--accent); letter-spacing: 0.04em; }
+.slogan { color: var(--muted); font-style: italic; }
+main { max-width: 960px; margin: 0 auto; padding: 1rem; }
+.card { background: var(--panel); border: 1px solid #30363d; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+.mode-banner { padding: 0.6rem 1rem; border-radius: 6px; margin-bottom: 1rem; border: 1px solid var(--accent); }
+.mode-live { border-color: var(--warn); }
+.alert { margin-left: 1rem; color: var(--warn); font-weight: 600; }
+button { background: transparent; color: var(--accent); border: 1px solid var(--accent); border-radius: 6px; padding: 0.4rem 0.9rem; cursor: pointer; }
+.actions form { display: inline-block; margin-right: 0.5rem; }
+.note { color: var(--muted); font-size: 0.9rem; }

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="mode-banner mode-{{ runtime.active_mode.value }}">
+  Mode: <strong>{{ runtime.active_mode.value }}</strong>
+  {% if runtime.dispatch_paused %}— dispatch paused ({{ runtime.pause_reason }}){% else %}— dispatch running{% endif %}
+  {% if runtime.auth_blocked %}<span class="alert">Gmail needs reconnecting</span>{% endif %}
+</section>
+<section class="card">
+  <h2>Campaigns</h2>
+  <ul class="counts">
+    {% for state, count in counts|dictsort %}<li>{{ state }}: {{ count }}</li>{% else %}<li>No campaigns yet.</li>{% endfor %}
+  </ul>
+</section>
+<section class="card">
+  <h2>Needs attention</h2>
+  <ul>
+    {% for name, reason in attention %}<li>{{ name }} — {{ reason }}</li>{% else %}<li>Nothing to review.</li>{% endfor %}
+  </ul>
+</section>
+<section class="card actions">
+  <form method="post" action="/actions/pause"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Pause sending</button></form>
+  <form method="post" action="/actions/resume"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Resume sending</button></form>
+  <p class="note">Closing this browser tab does not stop the tray worker. Quitting the tray, sleep, logout or shutdown prevents dispatch.</p>
+</section>
+{% endblock %}
