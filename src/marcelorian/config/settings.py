@@ -83,6 +83,10 @@ DEFAULTS = AppSettings()
 MAX_LAST_INTERVAL_DAYS = 365
 #: Scheduling searches about a year ahead for the next window; longer blackouts are invalid.
 MAX_DAYS_WITHOUT_WINDOW = 365
+#: Outer bound for the adjustable send window, PI local time (spec §1; decision W1).
+WINDOW_OUTER_WEEKDAYS = frozenset({0, 1, 2, 3, 4})  # Monday-Friday
+WINDOW_OUTER_START = time(8, 0)
+WINDOW_OUTER_END = time(16, 0)
 _CAP_KEYS = (
     "pending_per_institution",
     "pending_per_lab",
@@ -149,13 +153,13 @@ def validate(settings: AppSettings) -> AppSettings:
         policy = normalized.window_policy()
     except ValueError as exc:
         raise SettingsError(str(exc)) from exc
-    # The window is a locked decision (spec §1, §9.4): settings may narrow it but never
-    # widen it beyond Tue-Thu 08:00-11:00, so no setting can start a send at/after 11:00.
-    locked = DEFAULTS.window_policy()
-    if not policy.weekdays <= locked.weekdays:
-        raise SettingsError("send days can only be narrowed within Tuesday-Thursday")
-    if policy.start < locked.start or policy.end > locked.end:
-        raise SettingsError("send hours can only be narrowed within 08:00-11:00")
+    # Spec §1 (owner decision W1): the default is Tue-Thu 08:00-11:00; settings may move it
+    # anywhere within Mon-Fri 08:00-16:00 PI local time, never beyond. Widening past the
+    # default needs explicit confirmation and is audited (less_conservative_keys).
+    if not policy.weekdays <= WINDOW_OUTER_WEEKDAYS:
+        raise SettingsError("send days must stay within Monday-Friday")
+    if policy.start < WINDOW_OUTER_START or policy.end > WINDOW_OUTER_END:
+        raise SettingsError("send hours must stay within 08:00-16:00")
     _require_regular_windows(policy)
     return normalized
 

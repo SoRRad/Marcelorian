@@ -108,6 +108,37 @@ def test_no_send_starts_at_or_after_1100_local(live) -> None:
     assert live.message_state(mid) is MessageState.APPROVED_QUEUED
 
 
+def test_widened_window_sends_until_1600_monday_to_friday(live) -> None:
+    """Owner decision W1: the window may be widened up to Mon-Fri 08:00-16:00."""
+    live.settings(window_weekdays=[0, 1, 2, 3, 4], window_end="16:00")
+    monday = resolve_local(datetime(2026, 10, 26, 15, 30), live_tz())
+    live.clock.set(monday)
+    m1 = live.draft_and_approve(live_campaign(live))
+    assert live.dispatch(m1).outcome is Outcome.SENT
+    assert live.message(m1).sent_at == monday
+    live.clock.set(resolve_local(datetime(2026, 10, 26, 15, 59, 59), live_tz()))
+    m2 = live.draft_and_approve(live_campaign(live, live.institution()))
+    live.clock.set(resolve_local(datetime(2026, 10, 26, 16, 0), live_tz()))
+    result = live.dispatch(m2)
+    assert result.outcome is Outcome.DEFERRED and result.reason == "window_passed"
+    assert len(live.gmail.send_calls) == 1
+    live.clock.set(resolve_local(datetime(2026, 10, 31, 12, 0), live_tz()))  # Saturday
+    m3 = live.draft_and_approve(live_campaign(live, live.institution()))
+    window = live.message(m3)
+    # The next Monday is after US DST ends; the window is still 08:00-16:00 local.
+    assert window.eligible_window_start == resolve_local(datetime(2026, 11, 2, 8, 0), live_tz())
+    assert window.eligible_window_end == resolve_local(datetime(2026, 11, 2, 16, 0), live_tz())
+
+
+def test_default_window_is_unchanged_without_widening(live) -> None:
+    live.clock.set(resolve_local(datetime(2026, 10, 26, 9, 0), live_tz()))  # Monday
+    mid = live.draft_and_approve(live_campaign(live))
+    message = live.message(mid)
+    assert message.eligible_window_start == resolve_local(datetime(2026, 10, 27, 8, 0), live_tz())
+    assert message.eligible_window_end == resolve_local(datetime(2026, 10, 27, 11, 0), live_tz())
+    assert live.dispatch(mid).reason == "outside_window"
+
+
 def test_pacing_spaces_sends_and_survives_restart(live) -> None:
     inst_a, inst_b = live.institution(), live.institution()
     m1 = live.draft_and_approve(live_campaign(live, inst_a))

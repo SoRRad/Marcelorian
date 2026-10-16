@@ -248,6 +248,25 @@ def test_preflight_crossing_1100_does_not_submit_and_is_not_missed(live) -> None
     assert message.eligible_window_start == resolve_local(datetime(2026, 10, 21, 8, 0), NY)
 
 
+def test_preflight_crossing_a_widened_window_end_does_not_submit(live) -> None:
+    live.settings(window_weekdays=[0, 1, 2, 3, 4], window_end="16:00")
+    live.clock.set(resolve_local(datetime(2026, 10, 26, 15, 59, 30), NY))  # Monday
+    _camp, mid = email1(live)
+    live.real_sync.before = lambda: live.clock.set(
+        resolve_local(datetime(2026, 10, 26, 16, 0, 5), NY)
+    )
+    result = live.dispatch(mid)
+    assert result.outcome is Outcome.DEFERRED and result.reason == "window_passed"
+    assert live.gmail.send_calls == []
+    live.real_sync.before = None
+    with transaction(live.factory) as s:
+        actions = scheduling.apply_missed_window_rule(s, live.clock.now(), load_settings(s))
+    assert actions == [(mid, "rolled")]
+    assert live.message(mid).eligible_window_start == resolve_local(
+        datetime(2026, 10, 27, 8, 0), NY
+    )
+
+
 # -- cancellation after the claim (acceptance 54, B5) -----------------------------------------
 
 

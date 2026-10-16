@@ -66,19 +66,51 @@ def test_lowering_needs_no_confirmation(factory, clock) -> None:
 @pytest.mark.parametrize(
     "changes",
     [
-        {"window_end": "12:00"},
         {"window_start": "07:00"},
-        {"window_weekdays": [0, 1, 2, 3]},
-        {"window_weekdays": [1, 2, 3, 4]},
+        {"window_start": "07:59"},
+        {"window_end": "16:01"},
+        {"window_end": "17:00"},
+        {"window_weekdays": [0, 1, 2, 3, 4, 5]},
+        {"window_weekdays": [6]},
     ],
 )
-def test_locked_window_can_only_be_narrowed(factory, clock, changes) -> None:
-    # Spec §1/§9.4: never start at or after 11:00; Tue-Thu 08:00 is the outer bound.
+def test_window_cannot_leave_the_outer_bound(factory, clock, changes) -> None:
+    # Spec §1 (W1): adjustable within Mon-Fri 08:00-16:00 PI local time, never beyond.
     with transaction(factory) as s, pytest.raises(SettingsError) as info:
         update_settings(
             s, changes, actor=Actor.APPLICANT, now=clock.now(), confirm_less_conservative=True
         )
     assert not isinstance(info.value, ConfirmationRequired)
+
+
+@pytest.mark.parametrize(
+    ("changes", "keys"),
+    [
+        ({"window_end": "16:00"}, ["window_end"]),
+        ({"window_weekdays": [0, 1, 2, 3, 4]}, ["window_weekdays"]),
+        (
+            {"window_weekdays": [0, 1, 2, 3, 4], "window_end": "16:00"},
+            ["window_end", "window_weekdays"],
+        ),
+    ],
+)
+def test_widening_up_to_the_outer_bound_needs_confirmation_and_is_audited(
+    factory, clock, changes, keys
+) -> None:
+    with transaction(factory) as s, pytest.raises(ConfirmationRequired) as info:
+        update_settings(s, changes, actor=Actor.APPLICANT, now=clock.now())
+    assert info.value.keys == keys
+    with transaction(factory) as s:
+        update_settings(
+            s, changes, actor=Actor.APPLICANT, now=clock.now(), confirm_less_conservative=True
+        )
+    with transaction(factory) as s:
+        settings = load_settings(s)
+        for key, value in changes.items():
+            expected = tuple(value) if isinstance(value, list) else value
+            assert getattr(settings, key) == expected
+        event = s.scalars(select(AuditEvent).where(AuditEvent.action == "settings_changed")).one()
+        assert set(json.loads(event.detail_json)["changes"]) == set(changes)
 
 
 def test_narrowing_the_window_is_allowed(factory, clock) -> None:

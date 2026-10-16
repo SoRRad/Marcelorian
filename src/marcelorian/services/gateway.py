@@ -14,7 +14,7 @@ Phases
    ``X-Marcelorian-Id`` for this attempt.
 3. Atomic claim (``BEGIN IMMEDIATE``): re-reads message, approval, campaign
    stop/review status, active mode, persistent pause, do-not-contact,
-   dependencies, recipient, due time, window (11:00 limit), pacing, budget,
+   dependencies, recipient, due time, window (window-end limit), pacing, budget,
    reservations and sync coverage; inserts the ``in_flight`` attempt, holds
    the budget, records pacing, and commits. **This commit is the point beyond
    which recall is not promised.**

@@ -38,7 +38,7 @@ The application promises **duplicate-execution protection and conservative handl
 | Sequence | 4 emails total. Email 2 is due 7×24 h after Email 1 **actually sent**. Email 3 is due 7×24 h after Email 2 actually sent. Email 4 is due 1 calendar month after Email 3 actually sent. A setting allows N days for the last interval (calendar days in the PI's time zone; §9.3, C8). |
 | Approval | Every message, including each follow-up, is approved individually. Approval authorizes one immutable snapshot (§9.1). |
 | Sending | A tray worker starts at Windows login (with explicit setup consent). Approved messages are queued and dispatched in the next permitted window. If approved inside a window, they dispatch promptly once all checks and pacing allow. |
-| Window | Tue–Thu, 08:00 (inclusive) to 11:00 (exclusive), in the PI's **verified** IANA time zone. |
+| Window | Default Tue–Thu, 08:00 (inclusive) to 11:00 (exclusive), in the PI's **verified** IANA time zone. The applicant may adjust it anywhere within Mon–Fri 08:00–16:00 (owner decision W1, 2026-10-16); widening beyond the default needs explicit confirmation and is audited. |
 | Caps | 2 pending PIs per institution; 1 per lab; 3 newly contacted PIs per institution per rolling 30 days; 25 app-originated real Gmail submissions per rolling 24 hours. All adjustable (validated; increases above these defaults need explicit confirmation and are audited; §11, B16). |
 | Slot release | A genuine reply or a successfully sent Email 4 frees the pending slot. Auto-replies keep the slot. Confirmed bounces stop the sequence. Manual closures are auditable. |
 | Funding | Paid first. Unpaid stays eligible, with a flag. Unknown proceeds normally and is marked. All messages still need applicant approval. The unpaid flag is informational for the owner, not an extra approval step. |
@@ -331,7 +331,7 @@ Approval binds a snapshot containing: campaign ID, step, mode, connected sender 
 - **Optional blackouts (off by default):** US federal holidays and a Dec 20–Jan 5 range, both configurable. When enabled, they defer the eligible window; history and due dates are never rewritten.
 
 ### 9.4 Window, pacing, and recovery
-- A message never **starts** sending at or after 11:00 PI local time. If preflight crosses 11:00, nothing is submitted (B10).
+- A message never **starts** sending at or after the window end in PI local time (11:00 by default, never later than 16:00; §1, W1). If preflight crosses the window end, nothing is submitted (B10).
 - Within a window, sends are spaced 2–6 minutes apart (random) and limited by caps. Deferral for caps or pacing during normal operation rolls to the next valid window automatically, with no catch-up bursts.
 - **Pacing ledger (B8):** spacing is serialized and persisted across actual Gmail submissions in both `live` and `transport_test`, regardless of the PI's time zone. Sandbox uses its own simulated clock and pacing. A restart or mode switch never resets real-send spacing. A transport-test override never bypasses pacing.
 - **Missed-window rule (B7):** re-approval (`needs_reapproval`, campaign `paused_review(missed_window)`) is required only when an assigned eligible window passes with **no functioning dispatch/safety evaluation** of the message during the portion in which it could have been considered, because the worker or required connectivity/sync was unavailable.
@@ -380,7 +380,7 @@ Slow discovery or AI work never delays Gmail safety checks or dispatch. A heartb
 2. **Atomic claim** (one short transaction):
    - After the network preflight, **re-read** the current message, approval snapshot, campaign stop/review status, active mode, persistent pause, do-not-contact status, reservations, and budget. A reply, revocation, cancellation, pause, or mode switch recorded during preflight prevents submission (B10).
    - Conditionally move the message `approved_queued → sending` only if it is still `approved_queued` and the snapshot hash matches.
-   - Recheck the due time, the applicable window (including the 11:00 limit), and pacing at this point. This claim is the final authorization immediately before Gmail is invoked (B10).
+   - Recheck the due time, the applicable window (including the window-end limit), and pacing at this point. This claim is the final authorization immediately before Gmail is invoked (B10).
    - For Email 1, re-run the duplicate-outreach check over the full identity (§3): a PI merge, re-discovery, or a newly linked address or identifier after approval must never permit a second sequence. If two queued initials turn out to address one person, both are blocked until the applicant keeps one.
    - Validate or consume the campaign's existing reservation (§11).
    - Reserve the 24-hour budget.
@@ -595,7 +595,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 9. **Posted opportunities:** manual entries, deadlines, formal application route.
 10. **Settings:**
     - Caps, pacing, last-interval mode (increases above defaults need explicit confirmation and are audited; B16).
-    - Window: narrowing only, within the locked Tue–Thu 08:00–11:00 (§1); it can never be widened.
+    - Window: adjustable within Mon–Fri 08:00–16:00 PI local time (default Tue–Thu 08:00–11:00, §1, W1); widening beyond the default needs explicit confirmation and is audited.
     - Optional blackouts (off), optional 14-day hold (off).
     - Model, templates, tone.
     - Institution/lab grouping, time-zone overrides.
@@ -664,7 +664,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 12. Calendar-month math including Jan 31 and DST transitions, computed in the PI zone from the actual `sent_at`; the N-day alternative uses calendar days in the PI zone with the documented DST handling (C8).
 13. Due Tuesday, approved Thursday → sent Thursday; the next interval counts from Thursday.
 14. An unknown/ambiguous time zone blocks scheduling.
-15. No send starts at or after 11:00 local.
+15. No send starts at or after the window end in local time (11:00 by default; with a widened window, never at or after 16:00, and never on a weekend) (W1).
 16. Pacing; cap deferral rolls to the next window with no burst.
 17. No functioning evaluation during the considerable portion of the assigned window (worker asleep or sync/connectivity unavailable) → `needs_reapproval`; an ordinary restart, pacing/cap deferral, deliberate persistent pause, or mode switch preserves the approval and rolls the window; approval near a window's end is judged only on the remaining portion; only instants the current window policy permits count; persistent pause; cancellation (B7).
 18. Optional blackouts are off by default; when on, they defer without rewriting due dates.
@@ -718,7 +718,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 
 **Added by the pre-P0 review (B-decisions; automated, P0)**
 54. Cancellation committed during preflight prevents submission; cancellation after the claim commit is recorded as a stop request, stops future steps, and the attempt is reconciled; a Cancel action never clears an uncertain attempt (B5, B10).
-55. A preflight that crosses 11:00 PI local time does not submit; the message stays approved and rolls to the next window without being treated as missed (B10).
+55. A preflight that crosses the window end (11:00 by default) in PI local time does not submit; the message stays approved and rolls to the next window without being treated as missed (B10).
 56. A reply, revocation, persistent pause, mode switch, or do-not-contact entry recorded during preflight prevents submission at the atomic claim (B10).
 57. Concurrent claims (UI approval, scheduler tick, recovery) yield exactly one Gmail call; the unique unresolved-attempt index rejects a second unresolved attempt (B10).
 58. Every held-budget transition: hold → used at the established submission time; hold → released on definite rejection; hold retained while uncertain; uncertain → released only on recorded definite non-submission; uncertain → used on confirmed send; each attempt counted exactly once (B13, B17).

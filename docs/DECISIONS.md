@@ -54,6 +54,7 @@ the disagreement is a bug to report.
 | D2 | 14-day approval expiry | Deferred. v1 uses only the missed-window and content-change rules. | — | Not adopted | — |
 | D3 | Claude key validation | Later local setup may do an authenticated model-metadata lookup with no generation request. It is labelled credential/model-access validation, not proof of billing, budget, or generation. P0 makes no live provider calls. | §2, §16 | Doc (P1) | — |
 | D4 | Tooling | ruff, strict typing for safety-critical modules, property-based tests for timing and cap boundaries. Otherwise proportionate. | §2 | P0 | `pyproject.toml` (ruff, mypy); `hypothesis` tests in `tests/unit/test_timing.py` (timing) and `tests/service/test_handoff_coverage.py` (24 h / 30-day boundaries) |
+| W1 | Send window adjustability | Owner answer to note 7 (2026-10-16): the window may be **widened** as well as narrowed, anywhere within **Mon–Fri 08:00–16:00** PI local time. The default stays Tue–Thu 08:00–11:00. Widening beyond the default is a less-conservative change: explicit confirmation, audited. The window end replaces the fixed 11:00 limit in every check (claim, preflight crossing, missed-window portion). | §1, §9.4, §9.6, §16, §19 (15, 55) | P0 | `config/settings.py` (`WINDOW_OUTER_*`); `tests/service/test_settings.py`, `tests/service/test_gateway.py`, `tests/service/test_gateway_race.py` |
 | D5 | Canned sandbox drafts | Clearly labelled canned synthetic drafts in sandbox, so practice and tests need no AI spend. They are not validated AI output or live-send-ready. No credentials needed for offline work. | §12 | Doc (P2) | — |
 
 ## P0 implementation notes (behavior chosen inside the decisions, documented here)
@@ -76,7 +77,8 @@ narrows behavior in the conservative direction. None of them changes a decision.
 3. **Missed-window evidence.** Dispatch evaluations are stored per message
    with `functioning` set only when the worker ran with valid authorization and
    a current sync: Gmail coverage at most 15 minutes old (three 5-minute polling
-   cycles) at the evaluation's start, with no open gap. This is decided from
+   cycles) at the evaluation's start, with no open gap. (The owner delegated
+   this value on 2026-10-16; `CURRENT_SYNC_TOLERANCE` in `services/scheduling.py`.) This is decided from
    the recorded worker state, not from the deferral reason, so a local cap or
    pacing deferral while coverage is stale is not consideration. Deferrals
    meaning the check itself could not run (sync, auth, search or transport
@@ -98,11 +100,10 @@ narrows behavior in the conservative direction. None of them changes a decision.
 6. **Schema scope.** P0 creates the sending, identity, and audit tables.
    Discovery-only tables (`evidence`, `grant_evidence`, `opportunity`,
    `assessment`, `task`) arrive with their phases via new Alembic migrations.
-7. **Window settings only narrow.** §1 locks the window at Tue–Thu 08:00–11:00
-   and §9.4 says a send never starts at or after 11:00, while §16 lists the
-   window among adjustable settings. Settings may therefore narrow the window
-   (fewer days, shorter hours) but never widen it. *Owner confirmation
-   requested* (this resolves a spec ambiguity in the conservative direction).
+7. **Window settings.** Originally resolved as "narrow only". The owner
+   answered on 2026-10-16 (decision W1): the window may be adjusted anywhere
+   within Mon–Fri 08:00–16:00 PI local time; the default stays Tue–Thu
+   08:00–11:00, and widening beyond it needs explicit confirmation.
 8. **Transport-test self-send.** When the transport_test recipient is the
    connected sender itself, the external prior-contact search and the
    new-thread reply search are skipped, because the sender's own address
