@@ -83,7 +83,7 @@ def platform_backend() -> Any:
         if sys.platform == "win32":
             from keyring.backends.Windows import WinVaultKeyring
 
-            backend: Any = WinVaultKeyring()
+            backend: Any = WinVaultKeyring()  # type: ignore[no-untyped-call]
         else:
             from keyring.backends.SecretService import Keyring as SecretServiceKeyring
 

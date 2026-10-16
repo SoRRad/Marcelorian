@@ -54,11 +54,13 @@ def _windows_known_folder(folder_guid: str) -> Path:  # pragma: no cover - Windo
             ("Data4", ctypes.c_ubyte * 8),
         )
 
+    if sys.platform != "win32":  # also lets type checkers see windll only on Windows
+        raise OSError("known folders exist only on Windows")
     raw = uuid.UUID(folder_guid).bytes_le
     guid = GUID.from_buffer_copy(raw)
     path_ptr = ctypes.c_wchar_p()
-    shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
-    ole32 = ctypes.windll.ole32  # type: ignore[attr-defined]
+    shell32 = ctypes.windll.shell32
+    ole32 = ctypes.windll.ole32
     result = shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(path_ptr))
     try:
         if result != 0 or path_ptr.value is None:
