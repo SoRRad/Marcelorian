@@ -1,0 +1,50 @@
+# Marcelorian CI - tests only (decision A4).
+#
+# * No secrets, no live service calls, read-only repository permissions.
+# * Ubuntu and Windows jobs; superseded runs are cancelled; jobs time out.
+# * Installer/release builds are added in P5.
+# * Triggers are deliberately limited to pull requests into main and manual runs.
+#   Before relying on this workflow, the owner checks the account's current
+#   GitHub Actions billing and allowance (public vs private repository,
+#   Windows runner rates). This file never enables overages or changes budgets.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned dependencies (hash-checked)
+        run: |
+          python -m pip install --upgrade "pip==25.2"
+          python -m pip install --require-hashes -r requirements/lock.txt
+          python -m pip install --no-deps -e .
+      - name: Lint
+        run: python -m ruff check src tests
+      - name: Type check
+        run: python -m mypy
+      - name: Tests
+        run: python -m pytest -q
