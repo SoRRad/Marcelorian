@@ -233,9 +233,22 @@ def test_applicant_resolutions_are_audited(live) -> None:
                 settings=load_settings(s),
                 actor=Actor.APPLICANT,
                 now=live.clock.now(),
+                gmail_message_id="gmail-msg-x",
+                gmail_thread_id="gmail-thread-x",
             )
     reported = live.clock.now()
     live.clock.advance(timedelta(hours=2))
+    with transaction(live.factory) as s, pytest.raises(send_results.ResolutionError):
+        send_results.resolve_confirmed_sent(  # Gmail IDs are required (thread for follow-ups)
+            s,
+            send_results.attempt_by_uid(s, uid),
+            sent_at=reported,
+            settings=load_settings(s),
+            actor=Actor.APPLICANT,
+            now=live.clock.now(),
+            gmail_message_id="",
+            gmail_thread_id="",
+        )
     with transaction(live.factory) as s:
         send_results.resolve_confirmed_sent(
             s,
@@ -244,6 +257,8 @@ def test_applicant_resolutions_are_audited(live) -> None:
             settings=load_settings(s),
             actor=Actor.APPLICANT,
             now=live.clock.now(),
+            gmail_message_id="gmail-msg-confirmed",
+            gmail_thread_id="gmail-thread-confirmed",
         )
     message = live.message(mid)
     assert (message.state, message.sent_at, message.sent_at_provenance) == (

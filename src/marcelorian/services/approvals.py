@@ -49,6 +49,7 @@ from marcelorian.domain.enums import (
     Mode,
     SnapshotState,
 )
+from marcelorian.domain.gmail_params import REQUIRED_SCOPES
 from marcelorian.domain.recipients import RecipientError, validate_recipient
 from marcelorian.domain.snapshot import (
     AttachmentRef,
@@ -258,10 +259,21 @@ def save_draft(
             detail={"step": step},
             mode=campaign.mode,
         )
+    pi = session.get(Pi, campaign.pi_id)
+    assert pi is not None
     message.draft_subject = content.subject
     message.draft_body = content.body
     message.draft_attachments_json = json.dumps(list(content.cv_version_ids))
-    message.draft_dependencies_json = json.dumps(list(content.fact_ids))
+    # The versions the draft text was written from (B18): approval refuses if they moved.
+    message.draft_dependencies_json = json.dumps(
+        {
+            "facts": [
+                [fact_id, _fact_version(session, fact_id)] for fact_id in content.fact_ids
+            ],
+            "pi_version": pi.version,
+        }
+    )
+    message.cancel_requested_at = None  # a deliberate revision supersedes an old cancel request
     message.draft_test_override_json = (
         json.dumps(content.test_override.to_dict()) if content.test_override else None
     )
@@ -276,6 +288,22 @@ def save_draft(
         )
     message.updated_at = now
     return message
+
+
+def _fact_version(session: Session, fact_id: int) -> int:
+    fact = session.get(ProfileFact, fact_id)
+    assert fact is not None
+    return fact.version
+
+
+def draft_dependencies(message: Message) -> tuple[list[tuple[int, int]], int | None]:
+    """(fact id, version drafted from) pairs and the PI version the draft text used."""
+    data = json.loads(message.draft_dependencies_json or "{}")
+    if isinstance(data, list):  # no recorded versions: nothing can be verified
+        return [(int(f), -1) for f in data], -1
+    facts = [(int(f), int(v)) for f, v in data.get("facts", [])]
+    pi_version = data.get("pi_version")
+    return facts, int(pi_version) if pi_version is not None else None
 
 
 def _end_snapshot(
@@ -328,11 +356,11 @@ def duplicate_outreach(session: Session, campaign: Campaign, address: str | None
                 Campaign.mode == campaign.mode,
                 Campaign.id != campaign.id,
                 func.lower(PiEmail.address) == address.lower(),
-                Campaign.state.in_(active_states),
             )
         ).all()
-        if same_address:
-            return True
+        for other in same_address:  # whatever its state, once it reached the address
+            if other.state in active_states or _sent_messages(session, other):
+                return True
     return False
 
 
@@ -394,11 +422,19 @@ def approval_blockers(
             reasons.append("sequence_stopped")
         if message.due_at is None:
             reasons.append("due_time_missing")
-    for fact_id in json.loads(message.draft_dependencies_json or "[]"):
+    facts, pi_version = draft_dependencies(message)
+    for fact_id, drafted_version in facts:
         fact = session.get(ProfileFact, fact_id)
         if fact is None or fact.status != FactStatus.CONFIRMED.value:
             reasons.append("fact_not_confirmed")
             break
+        if fact.version != drafted_version:
+            reasons.append("dependency_changed_since_draft")
+            break
+    if pi_version is not None and pi_version != pi.version:
+        reasons.append("dependency_changed_since_draft")
+    if message.cancel_requested_at is not None:
+        reasons.append("cancel_pending")
     if mode.is_real and _active_mailbox(session) is None:
         reasons.append("mailbox_not_connected")
     return reasons
@@ -586,10 +622,8 @@ def approve(
         (DependencyKind.INSTITUTION, institution.id, institution.version),
     ]
     deps += [(DependencyKind.CV_VERSION, cv.id, 1) for _ref, cv in attachments]
-    for fact_id in json.loads(message.draft_dependencies_json or "[]"):
-        fact = session.get(ProfileFact, fact_id)
-        assert fact is not None
-        deps.append((DependencyKind.PROFILE_FACT, fact.id, fact.version))
+    for fact_id, drafted_version in draft_dependencies(message)[0]:
+        deps.append((DependencyKind.PROFILE_FACT, fact_id, drafted_version))
     if mailbox is not None:
         deps.append((DependencyKind.MAILBOX_ACCOUNT, mailbox.id, mailbox.version))
     if allow_entry is not None:
@@ -610,8 +644,9 @@ def approve(
             now=now,
             reason="Email 1 approved",
         )
-    if current is MessageState.NEEDS_REAPPROVAL:
-        scheduling.resolve_missed_window_on_reapproval(session, message, actor=actor, now=now)
+    # A fresh approval of this message resolves its own missed-window reason, whatever
+    # route (direct re-approval, edit, cancel/stop and re-draft) led back here (B7).
+    scheduling.resolve_missed_window_on_reapproval(session, message, actor=actor, now=now)
     message.current_snapshot_id = snapshot.id
     message.due_at = due_at
     message.pi_timezone = institution.iana_tz
@@ -709,40 +744,9 @@ def cancel_initial(session: Session, campaign: Campaign, *, actor: Actor, now: d
         raise CancelRefused("Email 1 was already sent; close the campaign instead")
     if state is MessageState.CANCELLED:
         raise CancelRefused("Email 1 is already cancelled")
-    _end_snapshot(session, message, SnapshotState.REVOKED, now, "cancelled_before_first_send")
-    campaign_svc.set_message_state(
-        session,
-        message,
-        MessageState.CANCELLED,
-        actor=actor,
-        now=now,
-        reason="cancelled_before_first_send",
-    )
-    reservations.release_all(session, campaign, now, "cancelled_before_first_send")
-    for pause in campaign_svc.open_reasons(session, campaign.id):
-        campaign_svc.resolve_pause(
-            session, pause, resolution="cancelled_before_first_send", actor=actor, now=now
-        )
-    campaign.sequence_stopped = False
-    campaign.next_step, campaign.next_due_at = None, None
-    if CampaignState(campaign.state) in HOLDING_STATES:
-        campaign_svc.set_campaign_state(
-            session,
-            campaign,
-            CampaignState.CANDIDATE,
-            actor=actor,
-            now=now,
-            reason="cancelled_before_first_send",
-        )
-    audit(
-        session,
-        at=now,
-        actor=actor,
-        entity_type="campaign",
-        entity_id=campaign.id,
-        action="cancelled_before_first_send",
-        mode=campaign.mode,
-    )
+    if CampaignState(campaign.state) not in (CampaignState.CANDIDATE, *HOLDING_STATES):
+        raise CancelRefused("the campaign is already stopped; nothing remains to cancel")
+    campaign_svc.cancel_before_first_send(session, campaign, message, actor=actor, now=now)
     return "cancelled"
 
 
@@ -981,8 +985,16 @@ def upload_cv(
 def connect_mailbox(
     session: Session, email: str, scopes: frozenset[str], *, actor: Actor, now: datetime
 ) -> MailboxAccount:
-    """Record the verified connected account. A different account invalidates its approvals."""
+    """Record the verified connected account. A different account invalidates its approvals.
+
+    A verified (re)connection with the required scopes clears the global Gmail auth
+    block (spec §15); a connection missing a scope keeps real dispatch halted.
+    """
     normalized = email.strip().lower()
+    if scopes >= REQUIRED_SCOPES:
+        runtime.set_auth_block(session, False, None, now=now)
+    else:
+        runtime.set_auth_block(session, True, "required_scopes_missing", now=now)
     current = _active_mailbox(session)
     if current is not None and current.email == normalized:
         current.scopes_json = json.dumps(sorted(scopes))

@@ -97,6 +97,7 @@ from marcelorian.transport.base import (
     DefiniteRejection,
     MailTransport,
     MessageMeta,
+    SearchResult,
     TransportKind,
 )
 
@@ -138,6 +139,8 @@ class _Plan:
     content: SnapshotContent
     contact_addresses: tuple[str, ...]
     last_sent_at: datetime | None
+    #: transport_test message addressed to the connected sender itself (connectivity test).
+    self_send: bool
     #: When this evaluation began. Every evaluation record of one dispatch uses it, so a
     #: preflight that crosses the window end still counts as considered in the window (B7).
     started: datetime
@@ -261,8 +264,13 @@ class SendGateway:
             return _Verdict(Outcome.DEFERRED, DeferralReason.PAUSED)
         if mode.is_real and view.auth_blocked:
             return _Verdict(Outcome.DEFERRED, DeferralReason.AUTH_REQUIRED)
+        # A mailbox-level gap is checked before any cap or pacing deferral, so a cap
+        # deferral can never be recorded as a functioning evaluation during a gap (B7).
+        coverage = sync_svc.coverage(session, sync_svc.mailbox_key_for(mode), now)
+        if coverage.gap_open:
+            return _Verdict(Outcome.DEFERRED, DeferralReason.SYNC_GAP)
         if message.cancel_requested_at is not None:
-            return _Verdict(Outcome.BLOCKED, "cancel_requested")
+            return _Verdict(Outcome.BLOCKED, "cancel_requested", invalidate=True)
         state = CampaignState(campaign.state)
         if state in STOPPED_STATES or state is CampaignState.CANDIDATE:
             return _Verdict(Outcome.BLOCKED, "campaign_not_sendable")
@@ -285,6 +293,9 @@ class SendGateway:
         extra = (content.to,) if mode is Mode.TRANSPORT_TEST else ()
         if dnc.matches(session, pi.id, mode, extra):
             return _Verdict(Outcome.BLOCKED, "do_not_contact", invalidate=True)
+        if message.step == 1 and approvals.duplicate_outreach(session, campaign, content.to):
+            # Merges or re-discovery after approval must never permit a second sequence.
+            return _Verdict(Outcome.BLOCKED, "duplicate_outreach", invalidate=True)
         try:
             validate_recipient(
                 recipients.build_context(
@@ -310,7 +321,11 @@ class SendGateway:
             return _Verdict(Outcome.DEFERRED, DeferralReason.WINDOW_PASSED)
         if message.eligible_window_start is None or now < message.eligible_window_start:
             return _Verdict(Outcome.DEFERRED, DeferralReason.OUTSIDE_WINDOW)
-        if not in_window(now, tz, policy):
+        try:
+            permitted = in_window(now, tz, policy)
+        except SchedulingError:
+            return _Verdict(Outcome.BLOCKED, "no_permitted_window", invalidate=True)
+        if not permitted:
             return _Verdict(Outcome.DEFERRED, DeferralReason.OUTSIDE_WINDOW)
         ledger = ledger_for(mode)
         if not pacing.allows(session, ledger, now):
@@ -330,9 +345,6 @@ class SendGateway:
                     DeferralReason.OVER_CAPACITY,
                     cap_reason="over_capacity:" + ",".join(capacity.reasons),
                 )
-        coverage = sync_svc.coverage(session, sync_svc.mailbox_key_for(mode), now)
-        if coverage.gap_open:
-            return _Verdict(Outcome.DEFERRED, DeferralReason.SYNC_GAP)
         if preflight_started is not None and (
             coverage.last_gmail_coverage_at is None
             or coverage.last_gmail_coverage_at < preflight_started
@@ -377,10 +389,20 @@ class SendGateway:
         )
         return DispatchResult(verdict.outcome, str(verdict.reason))
 
+    @staticmethod
+    def _changed(message: Message, plan: _Plan) -> bool:
+        """The message was claimed, revoked or re-approved by someone else meanwhile."""
+        return (
+            message.state != MessageState.APPROVED_QUEUED.value
+            or message.current_snapshot_id != plan.snapshot_id
+        )
+
     def _record(self, plan: _Plan, verdict: _Verdict) -> DispatchResult:
         with transaction(self._factory) as session:
             message = session.get(Message, plan.message_id)
             assert message is not None
+            if self._changed(message, plan):
+                return DispatchResult(Outcome.NOT_ELIGIBLE, "changed_during_preflight")
             return self._apply_verdict(session, message, verdict, self._clock.now(), plan.started)
 
     def _plan(self, session: Session, message: Message, started: datetime) -> _Plan:
@@ -411,6 +433,7 @@ class SendGateway:
             content=content,
             contact_addresses=addresses,
             last_sent_at=last_sent_at,
+            self_send=mode is Mode.TRANSPORT_TEST and content.to == content.sender.lower(),
             started=started,
         )
 
@@ -455,12 +478,20 @@ class SendGateway:
     def _prior_contact(self, transport: MailTransport, plan: _Plan) -> DispatchResult | None:
         incomplete = _Verdict(Outcome.DEFERRED, DeferralReason.PRIOR_CONTACT_CHECK_INCOMPLETE)
         with transaction(self._factory) as session:
-            if prior_contact.unresolved_attempt_to(session, set(plan.contact_addresses)):
-                message = session.get(Message, plan.message_id)
-                assert message is not None
+            message = session.get(Message, plan.message_id)
+            assert message is not None
+            if self._changed(message, plan):
+                return DispatchResult(Outcome.NOT_ELIGIBLE, "changed_during_preflight")
+            if prior_contact.unresolved_attempt_to(
+                session, set(plan.contact_addresses), plan.mode
+            ):
                 return self._apply_verdict(
                     session, message, incomplete, self._clock.now(), plan.started
                 )
+        if plan.self_send:
+            # A transport_test self-send checks connectivity only (spec §12): searching the
+            # sender's own address would match the whole mailbox. Recorded in DECISIONS.md.
+            return None
         try:
             search = transport.search_message_ids(
                 prior_contact_query(plan.contact_addresses), include_spam_trash=True
@@ -472,16 +503,20 @@ class SendGateway:
             message = session.get(Message, plan.message_id)
             campaign = session.get(Campaign, plan.campaign_id)
             assert message is not None and campaign is not None
+            if self._changed(message, plan) or CampaignState(campaign.state) in (
+                *STOPPED_STATES,
+                CampaignState.CANDIDATE,
+            ):
+                return DispatchResult(Outcome.NOT_ELIGIBLE, "changed_during_preflight")
             check = prior_contact.evaluate(
                 session, campaign_id=campaign.id, mailbox_email=plan.content.sender, search=search
             )
             if not check.complete:
                 return self._apply_verdict(session, message, incomplete, now, plan.started)
             if check.unacknowledged:
-                if CampaignState(campaign.state) not in STOPPED_STATES:
-                    prior_contact.open_review(
-                        session, campaign, check.unacknowledged, actor=Actor.GATEWAY, now=now
-                    )
+                prior_contact.open_review(
+                    session, campaign, check.unacknowledged, actor=Actor.GATEWAY, now=now
+                )
                 scheduling.record_evaluation(
                     session,
                     message,
@@ -500,8 +535,13 @@ class SendGateway:
         try:
             in_thread = transport.get_thread_metadata(thread_id)
             since = int(plan.last_sent_at.timestamp())
-            search = transport.search_message_ids(
-                messages_from_since_query(plan.contact_addresses, since), include_spam_trash=True
+            search = (
+                SearchResult(ids=(), complete=True)
+                if plan.self_send  # the sender's own mail is not a possible reply
+                else transport.search_message_ids(
+                    messages_from_since_query(plan.contact_addresses, since),
+                    include_spam_trash=True,
+                )
             )
         except Exception:
             return self._record(plan, incomplete)
@@ -512,7 +552,7 @@ class SendGateway:
             message = session.get(Message, plan.message_id)
             campaign = session.get(Campaign, plan.campaign_id)
             assert message is not None and campaign is not None
-            known = prior_contact.own_gmail_ids(session) | set(
+            known = prior_contact.campaign_gmail_ids(session, campaign.id) | set(
                 session.scalars(
                     select(InboundEvent.gmail_message_id).where(
                         InboundEvent.campaign_id == campaign.id
@@ -574,10 +614,7 @@ class SendGateway:
             now = self._clock.now()
             message = session.get(Message, plan.message_id)
             assert message is not None
-            if (
-                message.state != MessageState.APPROVED_QUEUED.value
-                or message.current_snapshot_id != plan.snapshot_id
-            ):
+            if self._changed(message, plan):
                 return DispatchResult(Outcome.NOT_ELIGIBLE, "changed_during_preflight")
             settings = load_settings(session)
             verdict = self._verdict(session, message, settings, now, preflight_started=started)

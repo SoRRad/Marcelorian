@@ -66,10 +66,36 @@ def test_lowering_needs_no_confirmation(factory, clock) -> None:
 @pytest.mark.parametrize(
     "changes",
     [
-        {"pacing_min_seconds": 60},
         {"window_end": "12:00"},
         {"window_start": "07:00"},
         {"window_weekdays": [0, 1, 2, 3]},
+        {"window_weekdays": [1, 2, 3, 4]},
+    ],
+)
+def test_locked_window_can_only_be_narrowed(factory, clock, changes) -> None:
+    # Spec §1/§9.4: never start at or after 11:00; Tue-Thu 08:00 is the outer bound.
+    with transaction(factory) as s, pytest.raises(SettingsError) as info:
+        update_settings(
+            s, changes, actor=Actor.APPLICANT, now=clock.now(), confirm_less_conservative=True
+        )
+    assert not isinstance(info.value, ConfirmationRequired)
+
+
+def test_narrowing_the_window_is_allowed(factory, clock) -> None:
+    with transaction(factory) as s:
+        update_settings(
+            s,
+            {"window_weekdays": [2], "window_start": "09:00", "window_end": "10:30"},
+            actor=Actor.APPLICANT,
+            now=clock.now(),
+        )
+        assert load_settings(s).window_weekdays == (2,)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"pacing_min_seconds": 60},
         {"pending_per_lab": 2},
     ],
 )
@@ -94,6 +120,8 @@ def test_less_conservative_changes_need_confirmation(factory, clock, changes) ->
         {"window_weekdays": [7]},
         {"last_interval_mode": "weekly"},
         {"last_interval_days": 0},
+        {"last_interval_days": 3_000_000},
+        {"blackout_year_end": True, "year_end_start": "12-20", "year_end_end": "12-19"},
         {"year_end_start": "13-40"},
         {"debug_always_open": True},
     ],

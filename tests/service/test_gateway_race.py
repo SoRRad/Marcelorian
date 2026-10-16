@@ -264,7 +264,9 @@ def test_cancel_after_claim_is_not_a_recall(live) -> None:
     assert outcome == ["not_recalled"]
     assert result.outcome is Outcome.SENT  # the claim committed: recall is not promised
     campaign = live.campaign_row(camp)
-    assert campaign.sequence_stopped and campaign.next_step is None  # future steps stop
+    # Future steps stop (no automatic generation or dispatch), but the schedule is kept so
+    # the applicant can deliberately re-draft the next step later (B5).
+    assert campaign.sequence_stopped and campaign.next_step == 2
     assert live.message(mid).cancel_requested_at is not None
 
 

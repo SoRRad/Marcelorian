@@ -9,6 +9,7 @@ the live list.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import func, or_, select
@@ -44,23 +45,61 @@ def cluster_addresses(session: Session, cluster: set[int]) -> set[str]:
     }
 
 
+@dataclass(frozen=True)
+class _Identity:
+    pi_ids: frozenset[int]
+    addresses: frozenset[str]
+    orcids: frozenset[str]
+    openalex: frozenset[str]
+
+    def intersects(self, other: _Identity) -> bool:
+        return bool(
+            self.pi_ids & other.pi_ids
+            or self.addresses & other.addresses
+            or self.orcids & other.orcids
+            or self.openalex & other.openalex
+        )
+
+
+def _identity(
+    session: Session, pi_id: int | None, extra_addresses: tuple[str, ...] = ()
+) -> _Identity:
+    cluster = merge_cluster(session, pi_id) if pi_id is not None else set()
+    pis = session.scalars(select(Pi).where(Pi.id.in_(cluster))).all() if cluster else []
+    return _Identity(
+        pi_ids=frozenset(cluster),
+        addresses=frozenset(
+            cluster_addresses(session, cluster) | {a.lower() for a in extra_addresses}
+        ),
+        orcids=frozenset(p.orcid for p in pis if p.orcid),
+        openalex=frozenset(p.openalex_id for p in pis if p.openalex_id),
+    )
+
+
 def matches(
     session: Session, pi_id: int, mode: Mode, extra_addresses: tuple[str, ...] = ()
 ) -> list[DoNotContact]:
-    cluster = merge_cluster(session, pi_id)
-    pis = session.scalars(select(Pi).where(Pi.id.in_(cluster))).all()
-    addresses = cluster_addresses(session, cluster) | {a.lower() for a in extra_addresses}
-    orcids = {p.orcid for p in pis if p.orcid}
-    openalex = {p.openalex_id for p in pis if p.openalex_id}
-    conditions = [DoNotContact.pi_id.in_(cluster)]
-    if addresses:
-        conditions.append(func.lower(DoNotContact.email).in_(addresses))
-    if orcids:
-        conditions.append(DoNotContact.orcid.in_(orcids))
-    if openalex:
-        conditions.append(DoNotContact.openalex_id.in_(openalex))
+    """In-scope entries matching this PI through any identity basis (C7).
+
+    An entry made on a PI record covers that record's merge cluster, its exact known
+    addresses and its ORCID/OpenAlex identifiers, so a re-discovered, unmerged record
+    sharing any of them is matched too. Name + institution alone never matches.
+    """
+    candidate = _identity(session, pi_id, extra_addresses)
     scope = or_(DoNotContact.scope_mode == Mode.LIVE.value, DoNotContact.scope_mode == mode.value)
-    return list(session.scalars(select(DoNotContact).where(scope, or_(*conditions))))
+    found: list[DoNotContact] = []
+    for entry in session.scalars(select(DoNotContact).where(scope)):
+        entry_identity = _identity(session, entry.pi_id, (entry.email,) if entry.email else ())
+        entry_identity = _Identity(
+            pi_ids=entry_identity.pi_ids,
+            addresses=entry_identity.addresses,
+            orcids=entry_identity.orcids | ({entry.orcid} if entry.orcid else set()),
+            openalex=entry_identity.openalex
+            | ({entry.openalex_id} if entry.openalex_id else set()),
+        )
+        if candidate.intersects(entry_identity):
+            found.append(entry)
+    return found
 
 
 def name_institution_warnings(session: Session, pi_id: int) -> list[int]:

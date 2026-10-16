@@ -2,9 +2,13 @@
 
 * The app's own attempts are reconciled first: an unresolved attempt to the
   same address makes the check incomplete.
-* Search results exclude the app's own messages (by stored Gmail IDs) and the
-  hits already acknowledged for this mailbox + campaign. Anything else pauses
-  the campaign as ``prior_contact_found``.
+* Search results exclude only *this campaign's* own messages (by stored Gmail
+  IDs) and the hits already acknowledged for this mailbox + campaign. Messages
+  the app sent for any other campaign are real prior contact (re-discovery or
+  a later merge must never permit a duplicate sequence), so anything else
+  pauses the campaign as ``prior_contact_found``.
+* Unresolved attempts are only those in the same mailbox: live and
+  transport_test share the real mailbox; sandbox only sees sandbox (C9).
 * Acknowledgment covers only the exact reviewed Gmail IDs. It never ignores
   future mail, bypasses do-not-contact, or permits a duplicate sequence.
 * An incomplete search is never a clean result.
@@ -31,7 +35,9 @@ from marcelorian.domain.enums import (
     UNRESOLVED_ATTEMPT_STATES,
     Actor,
     InboundClassification,
+    Mode,
     PauseReason,
+    ledger_for,
 )
 from marcelorian.services import campaigns as campaign_svc
 from marcelorian.services.audit import audit
@@ -45,28 +51,38 @@ class PriorContactCheck:
     reason: str | None = None
 
 
-def own_gmail_ids(session: Session) -> set[str]:
+def campaign_gmail_ids(session: Session, campaign_id: int) -> set[str]:
+    """Gmail IDs of messages this campaign itself sent (or recorded as its own)."""
     ids = set(
         session.scalars(
-            select(SendAttempt.gmail_message_id).where(SendAttempt.gmail_message_id.is_not(None))
+            select(SendAttempt.gmail_message_id)
+            .join(Message, Message.id == SendAttempt.message_id)
+            .where(Message.campaign_id == campaign_id, SendAttempt.gmail_message_id.is_not(None))
         )
     )
     ids |= set(
         session.scalars(
-            select(Message.gmail_message_id).where(Message.gmail_message_id.is_not(None))
+            select(Message.gmail_message_id).where(
+                Message.campaign_id == campaign_id, Message.gmail_message_id.is_not(None)
+            )
         )
     )
     ids |= set(
         session.scalars(
             select(InboundEvent.gmail_message_id).where(
-                InboundEvent.classification == InboundClassification.OWN_MESSAGE.value
+                InboundEvent.campaign_id == campaign_id,
+                InboundEvent.classification == InboundClassification.OWN_MESSAGE.value,
             )
         )
     )
     return {i for i in ids if i}
 
 
-def unresolved_attempt_to(session: Session, addresses: set[str]) -> bool:
+def same_mailbox_modes(mode: Mode) -> list[str]:
+    return [m.value for m in Mode if ledger_for(m) is ledger_for(mode)]
+
+
+def unresolved_attempt_to(session: Session, addresses: set[str], mode: Mode) -> bool:
     return bool(
         session.scalar(
             select(func.count())
@@ -74,6 +90,7 @@ def unresolved_attempt_to(session: Session, addresses: set[str]) -> bool:
             .where(
                 func.lower(SendAttempt.recipient).in_({a.lower() for a in addresses}),
                 SendAttempt.status.in_([s.value for s in UNRESOLVED_ATTEMPT_STATES]),
+                SendAttempt.mode.in_(same_mailbox_modes(mode)),
             )
         )
     )
@@ -95,7 +112,9 @@ def evaluate(
 ) -> PriorContactCheck:
     if not search.complete:
         return PriorContactCheck(complete=False, reason="search_incomplete")
-    excluded = own_gmail_ids(session) | acknowledged_ids(session, mailbox_email, campaign_id)
+    excluded = campaign_gmail_ids(session, campaign_id) | acknowledged_ids(
+        session, mailbox_email, campaign_id
+    )
     hits = tuple(sorted({i for i in search.ids if i not in excluded}))
     return PriorContactCheck(complete=True, unacknowledged=hits)
 

@@ -62,9 +62,10 @@ These notes give concrete code-level meaning to the resolutions above. Each one
 narrows behavior in the conservative direction. None of them changes a decision.
 
 1. **Rolling-window boundary.** An event at time `t` counts in a rolling window
-   of length `W` evaluated at `now` iff `now - W < t <= now`. An event exactly
-   24 h (or 30 days) old no longer counts. Held (in-flight/uncertain) budget
-   entries count regardless of age until resolved.
+   of length `W` evaluated at `now` iff `t > now - W`. An event exactly 24 h (or
+   30 days) old no longer counts. There is no upper bound, so a send time that
+   Gmail reports slightly ahead of the local clock counts at once. Held
+   (in-flight/uncertain) budget entries count regardless of age until resolved.
 2. **Point of no recall.** The atomic claim transaction is the final
    authorization. It re-reads everything listed in B10, checks window/due/
    pacing, records the attempt as `in_flight`, and commits. Only an in-memory
@@ -91,3 +92,53 @@ narrows behavior in the conservative direction. None of them changes a decision.
 6. **Schema scope.** P0 creates the sending, identity, and audit tables.
    Discovery-only tables (`evidence`, `grant_evidence`, `opportunity`,
    `assessment`, `task`) arrive with their phases via new Alembic migrations.
+7. **Window settings only narrow.** §1 locks the window at Tue–Thu 08:00–11:00
+   and §9.4 says a send never starts at or after 11:00, while §16 lists the
+   window among adjustable settings. Settings may therefore narrow the window
+   (fewer days, shorter hours) but never widen it. *Owner confirmation
+   requested* (this resolves a spec ambiguity in the conservative direction).
+8. **Transport-test self-send.** When the transport_test recipient is the
+   connected sender itself, the external prior-contact search and the
+   new-thread reply search are skipped, because the sender's own address
+   matches the whole mailbox. The own-attempt check and the thread check still
+   run (spec §12: a self-send tests connectivity only).
+9. **Duplicate outreach at dispatch.** Email 1 re-runs the duplicate-outreach
+   check at the local check and at the atomic claim. A same-address campaign
+   that sent anything counts in every state. If two queued initials become one
+   person through a merge, both are blocked until the applicant cancels one
+   and re-approves the other.
+10. **Prior-contact exclusions.** Only this campaign's own messages are
+    excluded from prior-contact hits. Messages the app sent for other campaigns
+    are prior contact. Unresolved attempts are counted only within the same
+    mailbox (live + transport_test, or sandbox).
+11. **A cancel recorded during submission.** It takes effect once
+    non-submission is definite (definite rejection, or recorded non-submission
+    of an uncertain attempt). An Email 1 then follows the B3 path (campaign
+    back to `candidate`, reservations released); a follow-up is cancelled.
+    Approval is refused while such a request is pending; a deliberate re-draft
+    clears it.
+12. **Next step after a stopped sequence.** After a send, the next step's due
+    time is recorded whenever the campaign still holds outreach, even if the
+    sequence was stopped. `sequence_stopped` blocks automatic generation (P3)
+    and dispatch, and keeps the B5 exit (deliberate re-draft) reachable.
+13. **Drafted dependency versions.** A draft records the fact versions and the
+    PI version (salutation) its text was written from. Approval is refused
+    with `dependency_changed_since_draft` if any of them changed, so the
+    applicant re-drafts first.
+14. **Confirmed-sent resolution.** Resolving an uncertain attempt as sent
+    requires its Gmail message and thread IDs, so follow-ups can thread on the
+    real conversation.
+15. **Settings sanity.** The N-day final interval is limited to 1–365 days.
+    Blackout settings that leave no send day for 365 days or more are rejected.
+16. **Missed-window portion.** The considered portion starts at the latest of
+    the window start, the approval time and the due time. It contains only
+    instants that the *current* window policy permits, which honors blackouts
+    and narrowed hours added after approval. Deferrals for `outside_window`,
+    `not_due`, `paused` and `mode_inactive` are never treated as consideration.
+    A mailbox-level sync gap is checked before any cap or pacing deferral.
+17. **Reconnect clears the auth block.** A verified (re)connection with both
+    required scopes clears the global Gmail auth block. A connection missing a
+    scope keeps it.
+18. **Changes during preflight.** If the message was claimed, revoked or
+    re-approved by another caller during the network preflight, the result is
+    `changed_during_preflight` and nothing about the message is altered.

@@ -2,8 +2,10 @@
 
 * One ledger row per attempt; each attempt is counted exactly once.
 * ``held`` (in-flight or uncertain) rows count regardless of age until resolved.
-* ``used`` rows count while ``now - 24h < used_at <= now``; ``used_at`` is the
-  established actual submission time.
+* ``used`` rows count while ``used_at > now - 24h``; ``used_at`` is the
+  established actual submission time. There is deliberately no upper bound: a
+  send time reported slightly ahead of the local clock (reconciliation accepts
+  small clock skew) is real usage and must count immediately.
 * ``released`` rows never count. A hold is released only on definite
   non-acceptance or on recorded evidence of definite non-submission.
 * Live and transport_test share the ``real`` ledger; sandbox uses ``sandbox``.
@@ -32,7 +34,6 @@ def count(session: Session, ledger: Ledger, now: datetime) -> int:
     used = and_(
         BudgetLedger.status == BudgetStatus.USED.value,
         BudgetLedger.used_at > now - WINDOW,
-        BudgetLedger.used_at <= now,
     )
     stmt = select(func.count()).where(BudgetLedger.ledger == ledger.value, or_(held, used))
     return int(session.scalar(stmt) or 0)

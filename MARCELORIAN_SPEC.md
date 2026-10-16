@@ -365,7 +365,8 @@ Slow discovery or AI work never delays Gmail safety checks or dispatch. A heartb
    - An **incremental sync completes immediately before sending**. Any unresolved mailbox-level coverage gap blocks **all** real sends. A proven thread-specific problem pauses only that campaign; a mailbox or credential failure is never labelled thread-specific (B10).
    - **For follow-ups:** refresh the exact campaign thread and messages from the PI's known addresses since the last send.
    - **For Email 1 (B14):** reconcile the app's own attempts first. Then check prior-contact records and search Gmail metadata for messages to/from the PI's exact known addresses, with full pagination for the declared scope, spam/trash included, and drafts excluded. IDs may locate hits; only minimal permitted metadata and an *Open in Gmail* action are shown, never bodies or snippets.
-     - Any unacknowledged hit → `paused_review(prior_contact_found)`.
+     - Any unacknowledged hit → `paused_review(prior_contact_found)`. Only this campaign's own messages are excluded; messages the app sent for any other campaign count as prior contact.
+     - A `transport_test` self-send (recipient = connected sender) tests connectivity only, so the external prior-contact search is skipped for it (spec §12).
      - The applicant either **acknowledges these reviewed messages and proceeds**, or **closes**. Acknowledgment is scoped to the mailbox, the campaign, and the exact Gmail IDs reviewed. It never ignores future mail from that PI, bypasses do-not-contact, or permits a duplicate app sequence. New unacknowledged hits trigger review again.
      - An incomplete search is not a clean result: dispatch is deferred.
      - A bounded scan does not prove no prior contact; the UI says so.
@@ -376,6 +377,7 @@ Slow discovery or AI work never delays Gmail safety checks or dispatch. A heartb
    - After the network preflight, **re-read** the current message, approval snapshot, campaign stop/review status, active mode, persistent pause, do-not-contact status, reservations, and budget. A reply, revocation, cancellation, pause, or mode switch recorded during preflight prevents submission (B10).
    - Conditionally move the message `approved_queued → sending` only if it is still `approved_queued` and the snapshot hash matches.
    - Recheck the due time, the applicable window (including the 11:00 limit), and pacing at this point. This claim is the final authorization immediately before Gmail is invoked (B10).
+   - For Email 1, re-run the duplicate-outreach check: a PI merge or re-discovery after approval must never permit a second sequence. If two queued initials turn out to address one person, both are blocked until the applicant keeps one.
    - Validate or consume the campaign's existing reservation (§11).
    - Reserve the 24-hour budget.
    - Insert a `send_attempt` (status `in_flight`) holding the attempt ID, app Message-ID, `X-Marcelorian-Id`, mode, sender, recipient, and snapshot hash.
@@ -467,7 +469,7 @@ All counts are per mode, except the real-submission budget and pacing ledger, wh
   - Definite non-acceptance releases the hold. Uncertainty keeps it until definite non-submission is supported and recorded (B13).
   - A lowered 24-hour budget can defer follow-ups as well as initials.
 - **Concurrency:** reservations happen in transactions so parallel approvals/sends can never oversubscribe.
-- **Boundaries:** an event at time `t` counts in a rolling window of length `W` evaluated at `now` iff `now − W < t ≤ now`. An event exactly 24 h (or exactly 30 days) old no longer counts. Held budget entries count regardless of age until resolved. Tested in code.
+- **Boundaries:** an event at time `t` counts in a rolling window of length `W` evaluated at `now` iff `t > now − W`. An event exactly 24 h (or exactly 30 days) old no longer counts. There is no upper bound, so an established send time slightly ahead of the local clock counts immediately. Held budget entries count regardless of age until resolved. Tested in code.
 - **Lowering a limit or merging groups below current occupancy (B6):** keep history, block new reservations, show "over capacity," and never cancel existing conversations or double-count.
   - New limits apply to new initial submissions, **including** initials that are reserved but not yet submitted. They are not silently grandfathered: their approvals and records are kept, but they are marked `over_capacity` and blocked at dispatch.
   - The UI explains that this can need applicant action: cancel an excess unsent campaign, restore the limit, or wait for an already-contacted campaign to release capacity. It does not claim that rolling to another window will resolve it.
@@ -588,7 +590,8 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 8. **Tasks:** referrals, contact-later.
 9. **Posted opportunities:** manual entries, deadlines, formal application route.
 10. **Settings:**
-    - Caps, window, pacing, last-interval mode (increases above defaults need explicit confirmation and are audited; B16).
+    - Caps, pacing, last-interval mode (increases above defaults need explicit confirmation and are audited; B16).
+    - Window: narrowing only, within the locked Tue–Thu 08:00–11:00 (§1); it can never be widened.
     - Optional blackouts (off), optional 14-day hold (off).
     - Model, templates, tone.
     - Institution/lab grouping, time-zone overrides.

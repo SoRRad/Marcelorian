@@ -63,6 +63,9 @@ def set_campaign_state(
         reservations.release_pending_slot(
             session, campaign, now, reason or f"left {current.value}", hold_until=hold_slot_until
         )
+        release_projected_contact_if_unneeded(
+            session, campaign, now, reason or f"left {current.value}"
+        )
     audit(
         session,
         at=now,
@@ -211,6 +214,33 @@ def resolve_reason_for_source(
             resolve_pause(session, row, resolution=resolution, actor=actor, now=now)
 
 
+def email1_sent(session: Session, campaign_id: int) -> bool:
+    return bool(
+        session.scalar(
+            select(Message.id).where(
+                Message.campaign_id == campaign_id,
+                Message.step == 1,
+                Message.state == MessageState.SENT.value,
+            )
+        )
+    )
+
+
+def release_projected_contact_if_unneeded(
+    session: Session, campaign: Campaign, now: datetime, reason: str
+) -> None:
+    """Release a projected new contact the campaign no longer needs (spec §11; B6, B13).
+
+    Needed while the campaign holds outreach (holding states), while its Email 1
+    attempt is unresolved, and - as consumed history - once Email 1 was sent.
+    """
+    if CampaignState(campaign.state) in HOLDING_STATES:
+        return
+    if email1_sent(session, campaign.id) or has_unresolved_attempt(session, campaign.id):
+        return
+    reservations.release_projected_contact(session, campaign, now, reason)
+
+
 def has_unresolved_attempt(session: Session, campaign_id: int) -> bool:
     return bool(
         session.scalar(
@@ -303,17 +333,6 @@ def close_campaign(
         raise CampaignError("closing a campaign requires a reason")
     campaign.sequence_stopped = True
     cancel_unsent_messages(session, campaign, actor=actor, now=now, reason=f"closed:{outcome}")
-    email1_sent = bool(
-        session.scalar(
-            select(Message.id).where(
-                Message.campaign_id == campaign.id,
-                Message.step == 1,
-                Message.state == MessageState.SENT.value,
-            )
-        )
-    )
-    if not email1_sent and not has_unresolved_attempt(session, campaign.id):
-        reservations.release_projected_contact(session, campaign, now, f"closed:{outcome}")
     campaign.close_outcome, campaign.close_reason = outcome.value, reason
     set_campaign_state(
         session,
@@ -323,6 +342,77 @@ def close_campaign(
         now=now,
         reason=f"{outcome.value}: {reason or ''}".strip(),
     )
+    release_projected_contact_if_unneeded(session, campaign, now, f"closed:{outcome}")
+
+
+def cancel_before_first_send(
+    session: Session, campaign: Campaign, message: Message, *, actor: Actor, now: datetime
+) -> None:
+    """B3 core: the caller has verified nothing was or might have been submitted."""
+    _end_snapshot(session, message, SnapshotState.REVOKED, now, "cancelled_before_first_send")
+    set_message_state(
+        session,
+        message,
+        MessageState.CANCELLED,
+        actor=actor,
+        now=now,
+        reason="cancelled_before_first_send",
+    )
+    reservations.release_all(session, campaign, now, "cancelled_before_first_send")
+    for pause in open_reasons(session, campaign.id):
+        resolve_pause(
+            session, pause, resolution="cancelled_before_first_send", actor=actor, now=now
+        )
+    campaign.sequence_stopped = False
+    campaign.next_step, campaign.next_due_at = None, None
+    if CampaignState(campaign.state) in HOLDING_STATES:
+        set_campaign_state(
+            session,
+            campaign,
+            CampaignState.CANDIDATE,
+            actor=actor,
+            now=now,
+            reason="cancelled_before_first_send",
+        )
+    audit(
+        session,
+        at=now,
+        actor=actor,
+        entity_type="campaign",
+        entity_id=campaign.id,
+        action="cancelled_before_first_send",
+        mode=campaign.mode,
+    )
+
+
+def complete_requested_cancel(
+    session: Session, campaign: Campaign, message: Message, *, actor: Actor, now: datetime
+) -> None:
+    """A Cancel pressed during submission takes effect once non-submission is definite (B5)."""
+    if message.cancel_requested_at is None:
+        return
+    if MessageState(message.state) not in (
+        MessageState.FAILED_DEFINITE,
+        MessageState.NEEDS_REAPPROVAL,
+    ):
+        return
+    if (
+        message.step == 1
+        and not email1_sent(session, campaign.id)
+        and not has_unresolved_attempt(session, campaign.id)
+        and CampaignState(campaign.state) in HOLDING_STATES
+    ):
+        cancel_before_first_send(session, campaign, message, actor=actor, now=now)
+    else:
+        set_message_state(
+            session,
+            message,
+            MessageState.CANCELLED,
+            actor=actor,
+            now=now,
+            reason="cancel requested during submission",
+        )
+    release_projected_contact_if_unneeded(session, campaign, now, "cancel requested")
 
 
 def stop_followup_sequence(

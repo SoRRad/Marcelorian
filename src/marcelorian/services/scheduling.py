@@ -20,7 +20,8 @@ When an approved message's assigned window ``[ws, we)`` has ended unsent:
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -37,12 +38,25 @@ from marcelorian.domain.enums import (
     SnapshotState,
 )
 from marcelorian.domain.snapshot import verify_canonical
-from marcelorian.domain.timing import WindowPolicy, load_zone, next_window
+from marcelorian.domain.timing import (
+    SchedulingError,
+    WindowPolicy,
+    load_zone,
+    merge_intervals,
+    next_window,
+    window_on_local_date,
+)
 from marcelorian.services import campaigns as campaign_svc
 from marcelorian.services import runtime
 from marcelorian.services.audit import audit
 
-_DELIBERATE_REASONS = (DeferralReason.PAUSED.value, DeferralReason.MODE_INACTIVE.value)
+#: Evaluations with these reasons are not evidence that the message was considered.
+_NOT_CONSIDERATION = (
+    DeferralReason.PAUSED.value,
+    DeferralReason.MODE_INACTIVE.value,
+    DeferralReason.OUTSIDE_WINDOW.value,
+    DeferralReason.NOT_DUE.value,
+)
 
 
 def record_evaluation(
@@ -82,10 +96,45 @@ def policy_for(snapshot: ApprovalSnapshot, settings: AppSettings) -> WindowPolic
     return policy
 
 
-def _was_considered(session: Session, message: Message, start: datetime, end: datetime) -> bool:
-    portions = runtime.considerable_intervals(session, Mode(message.mode), start, end)
+def permitted_intervals(
+    start: datetime, end: datetime, tz: ZoneInfo, policy: WindowPolicy
+) -> list[tuple[datetime, datetime]]:
+    """Instants within [start, end) at which a send could start under ``policy``."""
+    if start >= end:
+        return []
+    if policy.always_open:
+        return [(start, end)]
+    intervals: list[tuple[datetime, datetime]] = []
+    day = start.astimezone(tz).date() - timedelta(days=1)
+    last = end.astimezone(tz).date() + timedelta(days=1)
+    while day <= last:
+        window = window_on_local_date(day, tz, policy)
+        if window is not None:
+            lo, hi = max(window.start, start), min(window.end, end)
+            if lo < hi:
+                intervals.append((lo, hi))
+        day += timedelta(days=1)
+    return merge_intervals(intervals)
+
+
+def _intersect(
+    a: list[tuple[datetime, datetime]], b: list[tuple[datetime, datetime]]
+) -> list[tuple[datetime, datetime]]:
+    out = []
+    for lo1, hi1 in a:
+        for lo2, hi2 in b:
+            lo, hi = max(lo1, lo2), min(hi1, hi2)
+            if lo < hi:
+                out.append((lo, hi))
+    return merge_intervals(out)
+
+
+def _was_considered(
+    session: Session, message: Message, portions: list[tuple[datetime, datetime]]
+) -> bool:
     if not portions:
-        return True  # deliberately unavailable for the whole portion: not a miss
+        return True  # nothing could have been considered: not a miss
+    start, end = portions[0][0], portions[-1][1]
     evaluations = session.scalars(
         select(DispatchEvaluation.evaluated_at).where(
             DispatchEvaluation.message_id == message.id,
@@ -95,11 +144,31 @@ def _was_considered(session: Session, message: Message, start: datetime, end: da
             # Deferrals caused by deliberate unavailability prove nothing about consideration.
             or_(
                 DispatchEvaluation.reason.is_(None),
-                DispatchEvaluation.reason.not_in(_DELIBERATE_REASONS),
+                DispatchEvaluation.reason.not_in(_NOT_CONSIDERATION),
             ),
         )
     ).all()
     return any(lo <= at < hi for at in evaluations for lo, hi in portions)
+
+
+def _considerable_portions(
+    session: Session, message: Message, snapshot: ApprovalSnapshot, settings: AppSettings
+) -> list[tuple[datetime, datetime]]:
+    """The part of the assigned window in which the message could have been considered.
+
+    It starts at the latest of the window start, the approval and the due time, keeps
+    only instants the *current* window policy permits (blackouts, narrowed hours), and
+    drops deliberate pause and inactive-mode time (B7).
+    """
+    assert message.eligible_window_start is not None and message.eligible_window_end is not None
+    start = max(message.eligible_window_start, snapshot.approved_at)
+    if message.due_at is not None:
+        start = max(start, message.due_at)
+    end = message.eligible_window_end
+    policy = policy_for(snapshot, settings)
+    permitted = permitted_intervals(start, end, load_zone(message.pi_timezone), policy)
+    deliberate_free = runtime.considerable_intervals(session, Mode(message.mode), start, end)
+    return _intersect(permitted, deliberate_free)
 
 
 def apply_missed_window_rule(
@@ -115,54 +184,65 @@ def apply_missed_window_rule(
     ).all()
     for message in messages:
         snapshot = session.get(ApprovalSnapshot, message.current_snapshot_id)
-        assert snapshot is not None and message.eligible_window_start is not None
-        assert message.eligible_window_end is not None
-        start = max(message.eligible_window_start, snapshot.approved_at)
+        assert snapshot is not None and message.eligible_window_end is not None
         end = message.eligible_window_end
-        if _was_considered(session, message, start, end):
-            policy = policy_for(snapshot, settings)
-            tz = load_zone(message.pi_timezone)
-            due = message.due_at or now
-            window = next_window(max(now, due), tz, policy)
-            message.eligible_window_start, message.eligible_window_end = window.start, window.end
-            audit(
-                session,
-                at=now,
-                actor=actor,
-                entity_type="message",
-                entity_id=message.id,
-                action="window_rolled",
-                detail={"from_end": end.isoformat(), "to_start": window.start.isoformat()},
-                mode=message.mode,
-            )
-            results.append((message.id, "rolled"))
-            continue
-        snapshot.state, snapshot.ended_at, snapshot.end_reason = (
-            SnapshotState.INVALIDATED.value,
-            now,
-            "missed_window",
-        )
-        campaign_svc.set_message_state(
-            session,
-            message,
-            MessageState.NEEDS_REAPPROVAL,
-            actor=actor,
-            now=now,
-            reason="missed_window",
-        )
-        campaign = session.get(Campaign, message.campaign_id)
-        assert campaign is not None
-        campaign_svc.open_pause(
-            session,
-            campaign,
-            PauseReason.MISSED_WINDOW,
-            actor=actor,
-            now=now,
-            source_ref=f"message:{message.id}:{end.isoformat()}",
-            detail={"window_start": start.isoformat(), "window_end": end.isoformat()},
-        )
+        try:
+            portions = _considerable_portions(session, message, snapshot, settings)
+            if _was_considered(session, message, portions):
+                tz = load_zone(message.pi_timezone)
+                due = message.due_at or now
+                window = next_window(max(now, due), tz, policy_for(snapshot, settings))
+                message.eligible_window_start = window.start
+                message.eligible_window_end = window.end
+                audit(
+                    session,
+                    at=now,
+                    actor=actor,
+                    entity_type="message",
+                    entity_id=message.id,
+                    action="window_rolled",
+                    detail={"from_end": end.isoformat(), "to_start": window.start.isoformat()},
+                    mode=message.mode,
+                )
+                results.append((message.id, "rolled"))
+                continue
+            reason = "missed_window"
+        except SchedulingError:
+            reason = "no_permitted_window"  # defensive: settings validation prevents this
+        _require_reapproval(session, message, snapshot, end, reason, actor=actor, now=now)
         results.append((message.id, "needs_reapproval"))
     return results
+
+
+def _require_reapproval(
+    session: Session,
+    message: Message,
+    snapshot: ApprovalSnapshot,
+    window_end: datetime,
+    reason: str,
+    *,
+    actor: Actor,
+    now: datetime,
+) -> None:
+    snapshot.state, snapshot.ended_at, snapshot.end_reason = (
+        SnapshotState.INVALIDATED.value,
+        now,
+        reason,
+    )
+    campaign_svc.set_message_state(
+        session, message, MessageState.NEEDS_REAPPROVAL, actor=actor, now=now, reason=reason
+    )
+    campaign = session.get(Campaign, message.campaign_id)
+    assert campaign is not None
+    campaign_svc.open_pause(
+        session,
+        campaign,
+        PauseReason.MISSED_WINDOW,
+        actor=actor,
+        now=now,
+        source_ref=f"message:{message.id}:{window_end.isoformat()}",
+        detail={"window_end": window_end.isoformat(), "reason": reason},
+    )
 
 
 def resolve_missed_window_on_reapproval(

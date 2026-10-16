@@ -34,7 +34,7 @@ from marcelorian.domain.enums import (
     SentAtProvenance,
 )
 from marcelorian.domain.snapshot import verify_canonical
-from marcelorian.domain.timing import due_for_step, load_zone
+from marcelorian.domain.timing import SchedulingError, due_for_step, load_zone
 from marcelorian.services import budget
 from marcelorian.services import campaigns as campaign_svc
 from marcelorian.services.audit import audit
@@ -124,24 +124,39 @@ def _schedule_next(
     sent_at: datetime,
     settings: AppSettings,
 ) -> None:
-    if (
-        message.step >= 4
-        or CampaignState(campaign.state) not in HOLDING_STATES
-        or campaign.sequence_stopped
-        or message.cancel_requested_at is not None
-    ):
-        if message.cancel_requested_at is not None:
-            campaign.sequence_stopped = True
+    """Record when the next step is due.
+
+    It is recorded even when the sequence was stopped (Cancel/Stop during submission):
+    ``sequence_stopped`` blocks automatic generation and dispatch, while the schedule
+    keeps the B5 exit open - a deliberate re-draft of the next unsent step.
+    """
+    if message.cancel_requested_at is not None:
+        campaign.sequence_stopped = True
+    if message.step >= 4 or CampaignState(campaign.state) not in HOLDING_STATES:
         return
     content = verify_canonical(snapshot.canonical_json, snapshot.sha256)
     override = content.test_override.intervals() if content.test_override else None
     if override and Mode(campaign.mode) is not Mode.TRANSPORT_TEST:
         override = None  # defensive: overrides never apply outside transport_test
-    tz = load_zone(content.pi_timezone)
+    try:
+        tz = load_zone(content.pi_timezone)
+        due = due_for_step(message.step + 1, sent_at, tz, settings.last_interval(), override)
+    except (SchedulingError, OverflowError, ValueError) as exc:
+        # The send itself must still commit (spec §9.6 step 4); the schedule needs review.
+        campaign.next_step, campaign.next_due_at = None, None
+        audit(
+            session,
+            at=sent_at,
+            actor=Actor.SYSTEM,
+            entity_type="campaign",
+            entity_id=campaign.id,
+            action="next_step_unschedulable",
+            reason=type(exc).__name__,
+            mode=campaign.mode,
+        )
+        return
     campaign.next_step = message.step + 1
-    campaign.next_due_at = due_for_step(
-        message.step + 1, sent_at, tz, settings.last_interval(), override
-    )
+    campaign.next_due_at = due
 
 
 def finalize_rejected(
@@ -153,7 +168,7 @@ def finalize_rejected(
     actor: Actor,
     now: datetime,
 ) -> None:
-    message, _campaign, _snapshot = _context(session, attempt)
+    message, campaign, _snapshot = _context(session, attempt)
     attempt.status = AttemptStatus.FAILED_DEFINITE.value
     attempt.error_code, attempt.error_detail = error_code, detail[:500]
     attempt.submit_completed_at = now
@@ -175,6 +190,17 @@ def finalize_rejected(
         action="failed_definite",
         reason=error_code,
         mode=attempt.mode,
+    )
+    _after_non_submission(session, campaign, message, actor=actor, now=now)
+
+
+def _after_non_submission(
+    session: Session, campaign: Campaign, message: Message, *, actor: Actor, now: datetime
+) -> None:
+    """Definite non-submission: honour a recorded cancel and free unneeded capacity."""
+    campaign_svc.complete_requested_cancel(session, campaign, message, actor=actor, now=now)
+    campaign_svc.release_projected_contact_if_unneeded(
+        session, campaign, now, "email 1 definitely not submitted"
     )
 
 
@@ -240,6 +266,7 @@ def resolve_not_submitted(
         actor=actor,
         now=now,
     )
+    _after_non_submission(session, campaign, message, actor=actor, now=now)
 
 
 def resolve_confirmed_sent(
@@ -250,12 +277,18 @@ def resolve_confirmed_sent(
     settings: AppSettings,
     actor: Actor,
     now: datetime,
-    gmail_message_id: str | None = None,
-    gmail_thread_id: str | None = None,
+    gmail_message_id: str,
+    gmail_thread_id: str,
 ) -> None:
-    """Applicant confirmed the send in Gmail and reported the time it shows (B13)."""
+    """Applicant confirmed the send in Gmail and reported what it shows (B13).
+
+    The Gmail message and thread IDs are required: follow-ups must thread on the real
+    conversation (§9.7), so a confirmation without them would strand the campaign.
+    """
     if attempt.status != AttemptStatus.UNCERTAIN.value:
         raise ResolutionError("only an uncertain attempt can be confirmed")
+    if not (gmail_message_id or "").strip() or not (gmail_thread_id or "").strip():
+        raise ResolutionError("confirming a send requires its Gmail message and thread IDs")
     if not attempt.claimed_at <= sent_at <= now:
         raise ResolutionError("the reported send time must lie between the claim and now")
     attempt.resolution, attempt.resolved_by, attempt.resolved_at = "confirmed_sent", str(actor), now

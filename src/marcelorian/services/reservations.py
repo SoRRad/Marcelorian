@@ -7,7 +7,8 @@ assignment, so merged groups never double-count):
   while in ``outreach_pending``/``paused_review``; the optional 14-day hold keeps
   it counted until ``hold_until``);
 * new contacts in the rolling 30 days = ``new_contact`` reservations consumed at
-  an Email 1 ``sent_at`` with ``now - 30d < sent_at <= now`` plus active
+  an Email 1 ``sent_at`` with ``sent_at > now - 30d`` (no upper bound: a
+  slightly future-dated established time still counts) plus active
   (projected, i.e. approved-but-unsent, in-flight or uncertain) ones.
 
 A campaign that already owns reservations is *validated*, never reserved twice
@@ -132,7 +133,6 @@ def count_new_contacts(
     in_window = (
         (Reservation.status == ReservationStatus.CONSUMED.value)
         & (Reservation.consumed_at > now - NEW_CONTACT_WINDOW)
-        & (Reservation.consumed_at <= now)
     )
     projected = Reservation.status == ReservationStatus.ACTIVE.value
     stmt = (

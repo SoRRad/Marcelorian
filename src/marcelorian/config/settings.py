@@ -17,7 +17,8 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass, fields, replace
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
+from itertools import pairwise
 from typing import Any
 
 from sqlalchemy import select
@@ -77,6 +78,10 @@ class AppSettings:
 
 
 DEFAULTS = AppSettings()
+#: Sanity bound for the N-day last interval (B16: finite, sensible values).
+MAX_LAST_INTERVAL_DAYS = 365
+#: Scheduling searches about a year ahead for the next window; longer blackouts are invalid.
+MAX_DAYS_WITHOUT_WINDOW = 365
 _CAP_KEYS = (
     "pending_per_institution",
     "pending_per_lab",
@@ -121,8 +126,8 @@ def validate(settings: AppSettings) -> AppSettings:
         raise SettingsError("pacing minimum must not exceed pacing maximum")
     values["pacing_min_seconds"], values["pacing_max_seconds"] = pmin, pmax
     days = _strict_int("last_interval_days", settings.last_interval_days)
-    if days < 1:
-        raise SettingsError("last_interval_days must be at least 1")
+    if not 1 <= days <= MAX_LAST_INTERVAL_DAYS:
+        raise SettingsError(f"last_interval_days must be between 1 and {MAX_LAST_INTERVAL_DAYS}")
     values["last_interval_days"] = days
     try:
         LastIntervalMode(settings.last_interval_mode)
@@ -140,10 +145,34 @@ def validate(settings: AppSettings) -> AppSettings:
         raise SettingsError("year-end blackout dates must be MM-DD") from exc
     normalized = replace(settings, **values)
     try:
-        normalized.window_policy()
+        policy = normalized.window_policy()
     except ValueError as exc:
         raise SettingsError(str(exc)) from exc
+    # The window is a locked decision (spec §1, §9.4): settings may narrow it but never
+    # widen it beyond Tue-Thu 08:00-11:00, so no setting can start a send at/after 11:00.
+    locked = DEFAULTS.window_policy()
+    if not policy.weekdays <= locked.weekdays:
+        raise SettingsError("send days can only be narrowed within Tuesday-Thursday")
+    if policy.start < locked.start or policy.end > locked.end:
+        raise SettingsError("send hours can only be narrowed within 08:00-11:00")
+    _require_regular_windows(policy)
     return normalized
+
+
+def _require_regular_windows(policy: WindowPolicy) -> None:
+    """Reject blackout combinations that leave no send day for a year or more."""
+    start = date(2024, 1, 1)  # covers a leap year and every weekday alignment
+    permitted = [
+        start + timedelta(days=offset)
+        for offset in range(3 * 366)
+        if (start + timedelta(days=offset)).weekday() in policy.weekdays
+        and not policy.is_blackout(start + timedelta(days=offset))
+    ]
+    if not permitted:
+        raise SettingsError("the blackout settings leave no day on which sending is allowed")
+    gaps = [(b - a).days for a, b in pairwise(permitted)]
+    if max(gaps, default=0) >= MAX_DAYS_WITHOUT_WINDOW:
+        raise SettingsError("the blackout settings leave no send window for a year or more")
 
 
 def less_conservative_keys(new: AppSettings, old: AppSettings) -> list[str]:
