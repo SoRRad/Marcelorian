@@ -334,14 +334,22 @@ def _end_snapshot(
 # --------------------------------------------------------------------------- #
 
 
-def duplicate_outreach(session: Session, campaign: Campaign, address: str | None) -> bool:
+def duplicate_outreach(
+    session: Session, campaign: Campaign, address: str | None, *, step: int = 1
+) -> bool:
     """Another campaign in this mode already reached (or holds outreach for) this person.
 
     "This person" is the full identity closure (spec §3; C7): confirmed merges, every
     exact known address and ORCID/OpenAlex, so an unmerged re-discovered record
-    never gets a second app sequence (B14). Another campaign counts when it is active,
-    has a sent message, or has any attempt that was or may have been submitted to one
-    of this identity's addresses.
+    never gets a second app sequence (B14). For Email 1, another campaign counts when
+    it is active, has a sent message, or has any attempt that was or may have been
+    submitted to one of this identity's addresses.
+
+    For a follow-up (steps 2-4; round-3 #2) the link may have become known only after
+    both Email 1s went out. Both sequences are then held until the applicant keeps one
+    by closing the other: another campaign counts while it is not closed (a candidate
+    never reached anyone) or has an unresolved attempt to this identity. A closed
+    campaign's sent history alone does not hold the kept sequence.
     """
     mode = Mode(campaign.mode)
     # In transport_test the recipient is an allowlisted tester standing in for the PI,
@@ -363,9 +371,16 @@ def duplicate_outreach(session: Session, campaign: Campaign, address: str | None
             )
         )
     )
-    for other in others:
-        if other.state in active_states or _sent_messages(session, other):
+    if step > 1:
+        if any(o.state not in (CampaignState.CANDIDATE, CampaignState.CLOSED) for o in others):
             return True
+    else:
+        for other in others:
+            if other.state in active_states or _sent_messages(session, other):
+                return True
+    attempt_states = [AttemptStatus.IN_FLIGHT.value, AttemptStatus.UNCERTAIN.value]
+    if step == 1:
+        attempt_states.append(AttemptStatus.SENT.value)
     if person.addresses:
         reached = session.scalar(
             select(func.count())
@@ -375,13 +390,7 @@ def duplicate_outreach(session: Session, campaign: Campaign, address: str | None
                 Message.campaign_id != campaign.id,
                 SendAttempt.mode == mode.value,
                 func.lower(SendAttempt.recipient).in_(person.addresses),
-                SendAttempt.status.in_(
-                    [
-                        AttemptStatus.SENT.value,
-                        AttemptStatus.IN_FLIGHT.value,
-                        AttemptStatus.UNCERTAIN.value,
-                    ]
-                ),
+                SendAttempt.status.in_(attempt_states),
             )
         )
         if reached:
@@ -449,6 +458,10 @@ def approval_blockers(
             reasons.append("due_time_missing")
         if send_results.verified_references(session, campaign.id, message.step) is None:
             reasons.append("thread_headers_unverified")
+        if duplicate_outreach(
+            session, campaign, ready.address if ready else None, step=message.step
+        ):
+            reasons.append("duplicate_outreach")
     facts, pi_version = draft_dependencies(message)
     for fact_id, drafted_version in facts:
         fact = session.get(ProfileFact, fact_id)

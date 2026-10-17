@@ -145,12 +145,13 @@ def in_month_day_range(day: date, start: MonthDay, end: MonthDay) -> bool:
 class WindowPolicy:
     """When sends may *start*, in the PI's local time.
 
-    Spec §1: default Tue-Thu 08:00-11:00; adjustable within Mon-Fri 08:00-16:00 (W1).
+    Spec §1: default Mon-Fri 08:00-16:00, the widest allowed (owner W1); it may be
+    narrowed, never widened beyond that.
     """
 
-    weekdays: frozenset[int] = field(default_factory=lambda: frozenset({1, 2, 3}))  # Mon=0
+    weekdays: frozenset[int] = field(default_factory=lambda: frozenset(range(5)))  # Mon=0
     start: time = time(8, 0)
-    end: time = time(11, 0)
+    end: time = time(16, 0)
     blackout_federal_holidays: bool = False
     blackout_year_end: bool = False
     year_end_start: MonthDay = field(default_factory=lambda: MonthDay(12, 20))

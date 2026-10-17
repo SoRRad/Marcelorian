@@ -419,6 +419,7 @@ def test_missed_window_rule_uses_current_window_policy(factory) -> None:
     from tests.factories import World
 
     world = World(factory, ManualClock(resolve_local(datetime(2026, 11, 10, 11, 30), NY)))
+    world.narrow_window()
     camp = world.campaign(world.pi(world.institution()))
     mid = world.draft_and_approve(camp)  # assigned Wed 2026-11-11 (Veterans Day)
     world.settings(blackout_federal_holidays=True)  # holiday now blacked out
@@ -432,6 +433,7 @@ def test_evaluation_outside_narrowed_window_is_not_consideration(factory) -> Non
     from tests.factories import World
 
     world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
+    world.narrow_window()
     camp = world.campaign(world.pi(world.institution()))
     mid = world.draft_and_approve(camp)  # assigned Tue 08:00-11:00
     world.settings(window_end="09:00")  # narrowed after approval

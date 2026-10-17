@@ -53,6 +53,7 @@ addopts = "-ra --strict-markers"
 timeout = 60
 markers = [
     "windows_only: exercises a real Windows adapter; skipped on other platforms",
+    "narrow_window: world starts with the narrowed Tue-Thu 08:00-11:00 send window",
 ]
 filterwarnings = [
     "error::DeprecationWarning:marcelorian.*",

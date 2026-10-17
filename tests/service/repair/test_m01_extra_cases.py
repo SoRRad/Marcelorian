@@ -22,6 +22,8 @@ from marcelorian.domain.timing import resolve_local
 from marcelorian.services.gateway import DispatchResult, Outcome
 from tests.factories import World
 
+pytestmark = pytest.mark.narrow_window  # window-edge mechanics (11:00 end)
+
 NY = ZoneInfo("America/New_York")
 
 

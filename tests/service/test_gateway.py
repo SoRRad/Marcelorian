@@ -97,6 +97,7 @@ def live_tz():
     return ZoneInfo("America/New_York")
 
 
+@pytest.mark.narrow_window
 def test_no_send_starts_at_or_after_1100_local(live) -> None:
     camp = live_campaign(live)
     live.clock.set(resolve_local(datetime(2026, 10, 20, 10, 59, 59), live_tz()))
@@ -130,12 +131,21 @@ def test_widened_window_sends_until_1600_monday_to_friday(live) -> None:
     assert window.eligible_window_end == resolve_local(datetime(2026, 11, 2, 16, 0), live_tz())
 
 
-def test_default_window_is_unchanged_without_widening(live) -> None:
-    live.clock.set(resolve_local(datetime(2026, 10, 26, 9, 0), live_tz()))  # Monday
+def test_default_window_is_mon_to_fri_0800_to_1600(live) -> None:
+    """Owner W1 (2026-10-17): the default is the widest allowed window."""
+    live.clock.set(resolve_local(datetime(2026, 10, 26, 15, 0), live_tz()))  # Monday 15:00
     mid = live.draft_and_approve(live_campaign(live))
     message = live.message(mid)
-    assert message.eligible_window_start == resolve_local(datetime(2026, 10, 27, 8, 0), live_tz())
-    assert message.eligible_window_end == resolve_local(datetime(2026, 10, 27, 11, 0), live_tz())
+    assert message.eligible_window_end == resolve_local(datetime(2026, 10, 26, 16, 0), live_tz())
+    assert live.dispatch(mid).outcome is Outcome.SENT
+
+
+def test_default_window_after_friday_close_opens_monday(live) -> None:
+    live.clock.set(resolve_local(datetime(2026, 10, 30, 16, 0), live_tz()))  # Friday 16:00
+    mid = live.draft_and_approve(live_campaign(live))
+    message = live.message(mid)
+    assert message.eligible_window_start == resolve_local(datetime(2026, 11, 2, 8, 0), live_tz())
+    assert message.eligible_window_end == resolve_local(datetime(2026, 11, 2, 16, 0), live_tz())
     assert live.dispatch(mid).reason == "outside_window"
 
 

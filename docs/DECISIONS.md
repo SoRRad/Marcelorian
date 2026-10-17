@@ -30,7 +30,7 @@ the disagreement is a bug to report.
 | B7 | Missed-window policy | Re-approval is required when an assigned eligible window passes with **no functioning dispatch/safety evaluation** during the portion in which the approved message could have been considered, because the worker or required connectivity/sync was unavailable. Evaluations and their deferral reasons are recorded; a process heartbeat is not proof of Gmail coverage. Approval near a window's end counts only the remaining portion. Missing recovery evidence → review. Brief restarts, pacing/cap deferrals, deliberate persistent pause, and deliberate mode switches do not by themselves invalidate approval. | §9.4, §19 (17), §21 | P0 | `services/scheduling.py` (`apply_missed_window_rule`); `tests/service/test_missed_window.py` |
 | B8 | Pacing | Spacing is serialized and persisted across actual Gmail submissions in live **and** transport_test, regardless of PI time zone. Sandbox has separate simulated pacing. Restarts and mode switches do not reset spacing. A test-window override does not bypass pacing. | §9.4, §11 | P0 | `services/pacing.py`, `pacing_state` table; `tests/service/test_gateway.py` (pacing), `tests/service/test_modes.py` (shared ledger); `tests/service/repair/test_m01_*.py` (pacing at actual submission) |
 | B9 | Mode behavior | One active dispatch/generation mode. Gmail sync and reconciliation continue for all real campaigns of the connected mailbox, including inactive-mode ones. A mailbox-level cursor/coverage record is valid only after both real modes' full range is processed. A mode switch is an intentional pause, not a missed window. Dispatch resumes explicitly. Switching never changes a stored message's mode. | §3, §9.4, §12 | P0 (mode/pause state, gateway checks); sync P3 | `services/runtime.py`; `tests/service/test_modes.py` |
-| B10 | Current sync and final authorization | An incremental sync runs right before sending. A global unresolved gap blocks all real sends. A thread-specific problem pauses only that campaign; mailbox/credential failures are never mislabeled thread-specific. After network preflight, the atomic claim re-reads message, approval, campaign stop/review status, active mode, persistent pause, do-not-contact, reservations, and budget. Due time, window, pause/cancellation, and pacing are rechecked immediately before Gmail is invoked; if preflight crosses the window end in PI local time (11:00 by default; W1), nothing is submitted. The cancel/submit hand-off is serialized. Recall is not promised after the claim commits. No DB transaction is held across network calls. | §9.6, §10 (Known limit), §19 (25) | P0 | `services/gateway.py`; `tests/service/test_gateway_race.py`; `tests/service/repair/test_m01_*.py` (bounded hand-off, note 28) |
+| B10 | Current sync and final authorization | An incremental sync runs right before sending. A global unresolved gap blocks all real sends. A thread-specific problem pauses only that campaign; mailbox/credential failures are never mislabeled thread-specific. After network preflight, the atomic claim re-reads message, approval, campaign stop/review status, active mode, persistent pause, do-not-contact, reservations, and budget. Due time, window, pause/cancellation, and pacing are rechecked immediately before Gmail is invoked; if preflight crosses the window end in PI local time (16:00 by default; W1), nothing is submitted. The cancel/submit hand-off is serialized. Recall is not promised after the claim commits. No DB transaction is held across network calls. | §9.6, §10 (Known limit), §19 (25) | P0 | `services/gateway.py`; `tests/service/test_gateway_race.py`; `tests/service/repair/test_m01_*.py` (bounded hand-off, note 28) |
 | B11 | New-thread replies, test contacts | A possible reply from a known PI address in a **new** thread pauses for confirmation (`ambiguous_thread`) instead of freeing capacity. A test address stands in for the PI only inside its transport_test mapping. One active transport_test campaign per allowlisted recipient. Known real-PI addresses are rejected from the allowlist. Test addresses are never promoted into live identities. | §10, §12 | P0 (allowlist, mapping, uniqueness); classifier P3 | `services/recipients.py`, `domain/recipients.py`, `domain/mime.py`; `tests/unit/test_domain_pure.py`, `tests/service/test_modes.py`, `tests/service/test_review_round2.py` |
 | B12 | Message identifiers | RFC Message-ID = unique opaque value + the verified sender's email domain, never the hostname. A distinct value per authorized attempt, kept through that attempt's reconciliation and never regenerated after an empty search. `X-Marcelorian-Id` is kept: opaque value, no personal data, visible correlation header (not a secret). It is added to the metadata-header allowlist for the P0.3 preservation test. Message-ID is evidence, not a provider idempotency guarantee. | §9.6, §10 | P0 | `domain/identifiers.py`, `domain/gmail_params.py`; `tests/unit/test_domain_pure.py`, `tests/service/test_gateway.py`; `tests/service/repair/test_m06_*.py` (provider-observed Message-ID, note 31) |
 | B13 | Resolving uncertainty | Budget is released only when definite non-submission is supported and recorded, never because a Sent search is empty. A fresh approval is required before another attempt. Recovery never forces the campaign to `outreach_pending` or restarts a stopped sequence. A late successful result never overwrites a newer conversation/closed state. A genuine reply frees the pending slot but not an unresolved submission/contact ledger entry. One resolved pause reason never clears another. The established actual submission time drives accounting and intervals; reconciliation time and provenance are kept too; uncertain timestamp evidence → review. | §3, §9.6, §11 | P0 | `domain/transitions.py`, `services/campaigns.py`, `services/reconciliation.py`, `services/send_results.py`; `tests/service/test_recovery.py`; `tests/service/repair/test_m01_*.py`, `test_r3_recovery_snapshot_containment.py` |
@@ -54,7 +54,7 @@ the disagreement is a bug to report.
 | D2 | 14-day approval expiry | Deferred. v1 uses only the missed-window and content-change rules. | — | Not adopted | — |
 | D3 | Claude key validation | Later local setup may do an authenticated model-metadata lookup with no generation request. It is labelled credential/model-access validation, not proof of billing, budget, or generation. P0 makes no live provider calls. | §2, §16 | Doc (P1) | — |
 | D4 | Tooling | ruff, strict typing for safety-critical modules, property-based tests for timing and cap boundaries. Otherwise proportionate. | §2 | P0 | `pyproject.toml` (ruff, mypy); `hypothesis` tests in `tests/unit/test_timing.py` (timing) and `tests/service/test_handoff_coverage.py` (24 h / 30-day boundaries) |
-| W1 | Send window adjustability | Owner answer to note 7 (2026-10-16): the window may be **widened** as well as narrowed, anywhere within **Mon–Fri 08:00–16:00** PI local time. The default stays Tue–Thu 08:00–11:00. Widening beyond the default is a less-conservative change: explicit confirmation, audited. The window end replaces the fixed 11:00 limit in every check (claim, preflight crossing, missed-window portion). | §1, §9.4, §9.6, §16, §19 (15, 55) | P0 | `config/settings.py` (`WINDOW_OUTER_*`); `tests/service/test_settings.py`, `tests/service/test_gateway.py`, `tests/service/test_gateway_race.py` |
+| W1 | Send window adjustability | Owner answer to note 7 (2026-10-16): the window may be **widened** as well as narrowed, anywhere within **Mon–Fri 08:00–16:00** PI local time. The default was Tue–Thu 08:00–11:00 until the owner's answer of 2026-10-17: **the default is now Mon–Fri 08:00–16:00**, the outer bound itself. The window can only be narrowed, and re-widening a narrowed window stays within the default, so it needs no confirmation (the slot-based widening check remains for any future narrower default); every change is audited. Tests of window-edge mechanics pin the old narrow window explicitly (`World.narrow_window`, `@pytest.mark.narrow_window`). The window end replaces the fixed 11:00 limit in every check (claim, preflight crossing, missed-window portion). | §1, §9.4, §9.6, §16, §19 (15, 55) | P0 | `config/settings.py` (`WINDOW_OUTER_*`); `tests/service/test_settings.py`, `tests/service/test_gateway.py`, `tests/service/test_gateway_race.py` |
 | D5 | Canned sandbox drafts | Clearly labelled canned synthetic drafts in sandbox, so practice and tests need no AI spend. They are not validated AI output or live-send-ready. No credentials needed for offline work. | §12 | Doc (P2) | — |
 
 ## P0 implementation notes (behavior chosen inside the decisions, documented here)
@@ -88,7 +88,7 @@ widening decision W1. None of them changes a decision.
    meaning the check itself could not run (sync, auth, search or transport
    unavailable) are never functioning; `own_attempt_unresolved` (a deliberate
    hold by a healthy worker) is. Each evaluation is timestamped when that dispatch attempt
-   *began*, so a preflight that crosses the window end (11:00 by default; W1)
+   *began*, so a preflight that crosses the window end (16:00 by default; W1)
    still counts as considered inside the window. Deliberate pause and
    inactive-mode intervals come from the runtime-state log. Deferrals caused by
    those deliberate states never count as proof of consideration. Which part of
@@ -105,8 +105,8 @@ widening decision W1. None of them changes a decision.
    `assessment`, `task`) arrive with their phases via new Alembic migrations.
 7. **Window settings.** Originally resolved as "narrow only". The owner
    answered on 2026-10-16 (decision W1): the window may be adjusted anywhere
-   within Mon–Fri 08:00–16:00 PI local time; the default stays Tue–Thu
-   08:00–11:00, and widening beyond it needs explicit confirmation.
+   within Mon–Fri 08:00–16:00 PI local time. On 2026-10-17 the owner made
+   that range the default too (W1).
 8. **Transport-test self-send.** When the transport_test recipient is the
    connected sender itself, the external prior-contact search and the
    new-thread reply search are skipped, because the sender's own address
@@ -253,8 +253,8 @@ owner's written description of each finding.
     at `not_after`, so actual Gmail calls are at least the pacing minimum apart.
     A pause, cancel or reply inside the hand-off still cannot stop the call (spec
     §10 Known limit, now bounded). The real adapter's `send` must do no network
-    I/O before its single request (P0.3 contract). **Owner choices made
-    conservatively:** a known-not-invoked message needs re-approval rather than
+    I/O before its single request (P0.3 contract). **Owner confirmed
+    (2026-10-17):** a known-not-invoked message needs re-approval rather than
     rolling to the next window, and the limit is 5 s.
 29. **Fact confirmation withdrawal (M05).** `update_fact`'s `confirm` is the
     status the fact has after the call. `confirm=False` on a confirmed fact with
@@ -288,14 +288,15 @@ owner's written description of each finding.
     re-check until P2/P3 add in-process ones (the P2 confirm flow and the P3
     worker cycle must call `verify_unverified_sent`). Mismatches are audited and
     keep follow-ups held; the way out is close or stop (no new pause reason).
-    **Accepted P0 limitation:** the sandbox mailbox lives in memory, so a crash
+    **Accepted P0 limitation (owner confirmed 2026-10-17):** the sandbox mailbox lives in memory, so a crash
     between the success commit and the read holds that practice sequence
     (fail-closed) until P2 persists it; sandbox is not special-cased (§12).
     Tests use FakeGmailTransport rewrites only; live preservation is untested
     until P0.3.
 32. **Mailbox identity binding (M02).** Identity is the canonical primary
     address reported by the provider (no stable account ID without a scope
-    beyond `gmail.send`/`gmail.readonly`; a renamed primary address therefore
+    beyond `gmail.send`/`gmail.readonly`; owner confirmed 2026-10-17, together
+    with the literal history definition below; a renamed primary address therefore
     counts as a different identity). The bound identity is the latest mailbox
     row, or, if none exists, the senders recorded in real-mode history.
     Real-mode history is any live or transport_test campaign (any state),
@@ -317,3 +318,15 @@ owner's written description of each finding.
     held, a review opened, no search, no send) and recovery continues; during
     the post-send header check it leaves the message unverified; in
     `_schedule_next` it sends the schedule to review without undoing the send.
+34. **Duplicate follow-up sequences (round-3 #2; owner answer 2026-10-17).**
+    The duplicate-outreach check now also runs for steps 2–4, at approval and
+    in the gateway (phase 0 and the claim), over the same identity closure.
+    It covers the case where two unlinked records each got a legitimate Email 1
+    and a merge or a shared address/identifier links them later. A follow-up
+    is held (`duplicate_outreach`; a queued one is invalidated and needs
+    re-approval) while another same-mode campaign of that person is not
+    `closed` (a `candidate` reached no one) or has an in-flight or uncertain
+    attempt to that identity. The applicant keeps one sequence by closing the
+    other; a closed campaign's sent history does not hold the kept one. The
+    Email 1 rule is unchanged. Tests:
+    `tests/service/repair/test_r3_followup_duplicate.py`.
