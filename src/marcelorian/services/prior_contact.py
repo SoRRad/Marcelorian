@@ -180,13 +180,25 @@ def open_review(
 def acknowledge_and_proceed(
     session: Session, pause: CampaignPause, *, mailbox_email: str, actor: Actor, now: datetime
 ) -> list[str]:
+    """Acknowledge the exact Gmail IDs this review lists, then resolve only this review.
+
+    Overlapping open reviews (two callers racing the Email 1 preflight) may list the
+    same IDs. An ID already acknowledged for this mailbox + campaign keeps its first
+    acknowledgment; only new IDs are inserted, so the unique key is never violated
+    (M03). Never acknowledges by sender and never resolves another open review.
+    ``pause`` must be loaded in the caller's (BEGIN IMMEDIATE) transaction, which
+    makes the read-then-insert below race-free.
+    """
     if pause.reason != PauseReason.PRIOR_CONTACT_FOUND.value or pause.resolved_at is not None:
         raise ValueError("not an open prior-contact review")
-    ids = list(json.loads(pause.detail_json or "{}").get("gmail_ids", []))
-    for gmail_id in ids:
+    mailbox = mailbox_email.lower()
+    ids = list(dict.fromkeys(json.loads(pause.detail_json or "{}").get("gmail_ids", [])))
+    already = acknowledged_ids(session, mailbox, pause.campaign_id) & set(ids)
+    new_ids = [gmail_id for gmail_id in ids if gmail_id not in already]
+    for gmail_id in new_ids:
         session.add(
             PriorContactAck(
-                mailbox_email=mailbox_email.lower(),
+                mailbox_email=mailbox,
                 campaign_id=pause.campaign_id,
                 gmail_message_id=gmail_id,
                 acknowledged_at=now,
@@ -200,7 +212,12 @@ def acknowledge_and_proceed(
         entity_type="campaign",
         entity_id=pause.campaign_id,
         action="prior_contact_acknowledged",
-        detail={"count": len(ids)},
+        detail={
+            "pause_id": pause.id,
+            "count": len(ids),
+            "new_ids": new_ids,
+            "already_acknowledged_ids": sorted(already),
+        },
     )
     campaign_svc.resolve_pause(
         session, pause, resolution="acknowledged_and_proceed", actor=actor, now=now

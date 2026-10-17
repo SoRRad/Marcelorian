@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
+from email.utils import getaddresses
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -33,11 +35,13 @@ from marcelorian.domain.enums import (
     PauseReason,
     SentAtProvenance,
 )
+from marcelorian.domain.identifiers import bare_message_id
 from marcelorian.domain.snapshot import verify_canonical
 from marcelorian.domain.timing import SchedulingError, due_for_step, load_zone
 from marcelorian.services import budget
 from marcelorian.services import campaigns as campaign_svc
 from marcelorian.services.audit import audit
+from marcelorian.transport.base import MessageMeta
 
 
 class ResolutionError(RuntimeError):
@@ -81,7 +85,10 @@ def finalize_sent(
     budget.convert_to_used(session, attempt.id, sent_at, now)
     message.sent_at, message.sent_at_provenance = sent_at, provenance.value
     message.gmail_message_id, message.gmail_thread_id = gmail_message_id, gmail_thread_id
-    message.rfc_message_id = attempt.app_message_id
+    # The Message-ID used for threading is the provider-observed one, recorded only once
+    # the sent message's metadata has been read back and verified (M06). Until then the
+    # next step cannot be approved or dispatched; the app id stays on the attempt.
+    message.rfc_message_id = None
     message.cap_block_reason = None
     campaign_svc.set_message_state(
         session,
@@ -134,11 +141,13 @@ def _schedule_next(
         campaign.sequence_stopped = True
     if message.step >= 4 or CampaignState(campaign.state) not in HOLDING_STATES:
         return
-    content = verify_canonical(snapshot.canonical_json, snapshot.sha256)
-    override = content.test_override.intervals() if content.test_override else None
-    if override and Mode(campaign.mode) is not Mode.TRANSPORT_TEST:
-        override = None  # defensive: overrides never apply outside transport_test
     try:
+        # A snapshot failing its hash (SnapshotError is a ValueError) never undoes the
+        # recorded send: the schedule goes to review like any unschedulable step.
+        content = verify_canonical(snapshot.canonical_json, snapshot.sha256)
+        override = content.test_override.intervals() if content.test_override else None
+        if override and Mode(campaign.mode) is not Mode.TRANSPORT_TEST:
+            override = None  # defensive: overrides never apply outside transport_test
         tz = load_zone(content.pi_timezone)
         due = due_for_step(message.step + 1, sent_at, tz, settings.last_interval(), override)
     except (SchedulingError, OverflowError, ValueError) as exc:
@@ -269,6 +278,46 @@ def resolve_not_submitted(
     _after_non_submission(session, campaign, message, actor=actor, now=now)
 
 
+def record_not_invoked(
+    session: Session, attempt: SendAttempt, *, reason: str, actor: Actor, now: datetime
+) -> None:
+    """The gateway refused to call the transport for a claimed attempt (stale hand-off).
+
+    ``send`` was provably never invoked for this attempt, so this is a definite
+    non-submission recorded by the gateway itself, not an ambiguous outcome: the hold is
+    released, the message needs re-approval (never a blind retry), and no
+    ``send_uncertain`` review is opened. A cancel recorded after the claim takes effect.
+    """
+    if attempt.status != AttemptStatus.IN_FLIGHT.value:
+        raise ResolutionError("only an in-flight attempt can be recorded as not invoked")
+    message, campaign, _snapshot = _context(session, attempt)
+    attempt.status = AttemptStatus.NOT_SUBMITTED.value
+    attempt.submit_started_at = None
+    attempt.error_code = reason[:64]
+    attempt.resolution, attempt.resolution_note = "not_invoked", f"transport not called: {reason}"
+    attempt.resolved_by, attempt.resolved_at = str(actor), now
+    budget.release(session, attempt.id, now, "not_invoked")
+    campaign_svc.set_message_state(
+        session,
+        message,
+        MessageState.NEEDS_REAPPROVAL,
+        actor=actor,
+        now=now,
+        reason=f"claimed but not submitted: {reason}",
+    )
+    audit(
+        session,
+        at=now,
+        actor=actor,
+        entity_type="send_attempt",
+        entity_id=attempt.id,
+        action="not_invoked",
+        reason=reason,
+        mode=attempt.mode,
+    )
+    _after_non_submission(session, campaign, message, actor=actor, now=now)
+
+
 def resolve_confirmed_sent(
     session: Session,
     attempt: SendAttempt,
@@ -327,3 +376,105 @@ def attempt_by_uid(session: Session, attempt_uid: str) -> SendAttempt:
     if attempt is None:
         raise ResolutionError(f"unknown attempt {attempt_uid}")
     return attempt
+
+
+_RFC_ID = re.compile(r"^<[^<>@\s]+@[^<>@\s]+>$")
+
+
+def sent_attempt_for(session: Session, message: Message) -> SendAttempt | None:
+    return session.scalar(
+        select(SendAttempt).where(
+            SendAttempt.message_id == message.id,
+            SendAttempt.status == AttemptStatus.SENT.value,
+        )
+    )
+
+
+def thread_header_problem(
+    meta: MessageMeta, attempt: SendAttempt, message: Message, expected_thread: str | None
+) -> str | None:
+    """Why the provider's metadata does not verify this sent step, or None (M06)."""
+    if meta.gmail_message_id != message.gmail_message_id:
+        return "gmail_id_mismatch"
+    if "SENT" not in meta.label_ids:
+        return "not_in_sent"
+    if meta.thread_id != message.gmail_thread_id or (
+        expected_thread is not None and meta.thread_id != expected_thread
+    ):
+        return "thread_mismatch"
+    header_id = meta.header("message-id")
+    header_x = meta.header("x-marcelorian-id")
+    ours = (header_x is not None and header_x.strip() == attempt.x_marcelorian_id) or (
+        header_id is not None
+        and bare_message_id(header_id) == bare_message_id(attempt.app_message_id)
+    )
+    if not ours:
+        return "not_corroborated"
+    recipients = {a.lower() for _n, a in getaddresses([meta.header("to") or ""])}
+    if attempt.recipient.lower() not in recipients:
+        return "recipient_mismatch"
+    if header_id is None or not _RFC_ID.match(header_id.strip()):
+        return "message_id_missing"
+    return None
+
+
+def record_thread_headers(
+    session: Session,
+    message: Message,
+    attempt: SendAttempt,
+    meta: MessageMeta,
+    expected_thread: str | None,
+    *,
+    actor: Actor,
+    now: datetime,
+) -> bool:
+    """Store the provider-observed Message-ID if the metadata verifies the sent step."""
+    problem = thread_header_problem(meta, attempt, message, expected_thread)
+    if problem is not None:
+        audit(
+            session,
+            at=now,
+            actor=actor,
+            entity_type="message",
+            entity_id=message.id,
+            action="thread_headers_unverified",
+            reason=problem,
+            mode=message.mode,
+        )
+        return False
+    observed = (meta.header("message-id") or "").strip()
+    message.rfc_message_id = observed
+    audit(
+        session,
+        at=now,
+        actor=actor,
+        entity_type="message",
+        entity_id=message.id,
+        action="thread_headers_verified",
+        detail={
+            "message_id_preserved": bare_message_id(observed)
+            == bare_message_id(attempt.app_message_id)
+        },
+        mode=message.mode,
+    )
+    return True
+
+
+def verified_references(
+    session: Session, campaign_id: int, before_step: int
+) -> tuple[str, ...] | None:
+    """Provider-observed Message-IDs of steps 1..before_step-1, or None if any is unverified."""
+    sent = list(
+        session.scalars(
+            select(Message)
+            .where(
+                Message.campaign_id == campaign_id,
+                Message.step < before_step,
+                Message.state == MessageState.SENT.value,
+            )
+            .order_by(Message.step)
+        )
+    )
+    if len(sent) != before_step - 1 or any(m.rfc_message_id is None for m in sent):
+        return None
+    return tuple(m.rfc_message_id for m in sent if m.rfc_message_id)

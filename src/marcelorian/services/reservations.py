@@ -5,7 +5,7 @@ assignment, so merged groups never double-count):
 
 * pending occupancy = active ``pending_slot`` reservations (a campaign holds one
   while in ``outreach_pending``/``paused_review``; the optional 14-day hold keeps
-  it counted until ``hold_until``);
+  it counted until ``hold_until``, or until a genuine reply or closure ends it);
 * new contacts in the rolling 30 days = ``new_contact`` reservations consumed at
   an Email 1 ``sent_at`` with ``sent_at > now - 30d`` (no upper bound: a
   slightly future-dated established time still counts) plus active

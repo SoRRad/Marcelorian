@@ -1,7 +1,7 @@
 """Fake Gmail transport for tests: no network, scripted outcomes, full call capture.
 
 It emulates the parts of Gmail the gateway relies on: message/thread ids, the
-SENT label, header preservation (or rewriting, to test the fallback), the
+SENT label, header preservation (or rewriting, to test provider-observed IDs), the
 three query shapes built by ``marcelorian.domain.gmail_params``, and the
 failure modes that matter for safety (definite rejection, timeouts before or
 after acceptance, process death after acceptance, failed/incomplete searches).

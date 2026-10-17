@@ -30,16 +30,18 @@ from marcelorian.domain.enums import (
     UNRESOLVED_ATTEMPT_STATES,
     Actor,
     AttemptStatus,
+    MessageState,
     Mode,
     PauseReason,
     SentAtProvenance,
 )
 from marcelorian.domain.gmail_params import sent_search_query
 from marcelorian.domain.identifiers import bare_message_id
-from marcelorian.domain.snapshot import verify_canonical
+from marcelorian.domain.snapshot import SnapshotError, verify_canonical
 from marcelorian.services import campaigns as campaign_svc
 from marcelorian.services import scheduling, send_results
 from marcelorian.services import sync as sync_svc
+from marcelorian.services.audit import audit
 from marcelorian.transport.base import MailTransport, MessageMeta
 
 log = logging.getLogger(__name__)
@@ -85,7 +87,15 @@ def reconcile_attempt(
             return "noop"
         snapshot = session.get(ApprovalSnapshot, attempt.snapshot_id)
         assert snapshot is not None
-        expected_thread = verify_canonical(snapshot.canonical_json, snapshot.sha256).thread_id
+        try:
+            expected_thread = verify_canonical(snapshot.canonical_json, snapshot.sha256).thread_id
+        except SnapshotError:
+            # Untrustworthy evidence: hold the attempt for review (budget and slot stay
+            # held), never search or submit, and let recovery continue with the others.
+            send_results.mark_uncertain(
+                session, attempt, detail=f"{detail}; snapshot_invalid", actor=actor, now=clock.now()
+            )
+            return "uncertain"
         app_message_id = attempt.app_message_id
     metas: list[MessageMeta] = []
     search_ok = True
@@ -143,10 +153,14 @@ def reconcile_attempt(
             actor=actor,
             now=now,
         )
+        message = session.get(Message, attempt.message_id)
+        assert message is not None
+        # The matched copy is already provider metadata, read outside any transaction.
+        send_results.record_thread_headers(
+            session, message, attempt, first, expected_thread, actor=actor, now=now
+        )
         if len(matches) > 1:
             # More than one corroborated copy: recorded as sent, but held for applicant review.
-            message = session.get(Message, attempt.message_id)
-            assert message is not None
             owner = session.get(Campaign, message.campaign_id)
             assert owner is not None
             campaign_svc.open_pause(
@@ -199,15 +213,124 @@ def reconcile_unresolved(
     return results
 
 
+def verify_sent_headers(
+    session_factory: sessionmaker[Session],
+    transport: MailTransport,
+    clock: Clock,
+    message_id: int,
+    *,
+    actor: Actor = Actor.RECONCILER,
+) -> str:
+    """Read a sent step's metadata back and record its provider-observed Message-ID (M06).
+
+    Returns 'verified', 'unverified', 'pending' (read failed) or 'noop'. Only a
+    metadata read: it never submits, and no transaction is held across the read.
+    """
+    with transaction(session_factory) as session:
+        message = session.get(Message, message_id)
+        if (
+            message is None
+            or message.state != MessageState.SENT.value
+            or message.rfc_message_id is not None
+            or not message.gmail_message_id
+        ):
+            return "noop"
+        gmail_id = message.gmail_message_id
+        mode = message.mode
+    try:
+        meta = transport.get_message_metadata(gmail_id)
+    except Exception as exc:
+        log.warning(
+            "thread header check deferred for message %s: %s", message_id, type(exc).__name__
+        )
+        with transaction(session_factory) as session:
+            audit(
+                session,
+                at=clock.now(),
+                actor=actor,
+                entity_type="message",
+                entity_id=message_id,
+                action="thread_headers_check_deferred",
+                reason=type(exc).__name__,
+                mode=mode,
+            )
+        return "pending"
+    with transaction(session_factory) as session:
+        message = session.get(Message, message_id)
+        assert message is not None
+        if message.rfc_message_id is not None or message.gmail_message_id != gmail_id:
+            return "noop"
+        attempt = send_results.sent_attempt_for(session, message)
+        if attempt is None:
+            return "noop"
+        snapshot = session.get(ApprovalSnapshot, attempt.snapshot_id)
+        assert snapshot is not None
+        try:
+            expected_thread = verify_canonical(snapshot.canonical_json, snapshot.sha256).thread_id
+        except SnapshotError:
+            audit(
+                session,
+                at=clock.now(),
+                actor=actor,
+                entity_type="message",
+                entity_id=message_id,
+                action="thread_headers_unverified",
+                reason="snapshot_invalid",
+                mode=message.mode,
+            )
+            return "unverified"  # follow-ups stay held; recovery continues
+        ok = send_results.record_thread_headers(
+            session, message, attempt, meta, expected_thread, actor=actor, now=clock.now()
+        )
+        return "verified" if ok else "unverified"
+
+
+def verify_unverified_sent(
+    session_factory: sessionmaker[Session],
+    transports: Mapping[Mode, MailTransport],
+    clock: Clock,
+) -> dict[int, str]:
+    """Retry the metadata read for every sent step whose thread headers are unverified."""
+    with transaction(session_factory) as session:
+        pending = [
+            (m.id, Mode(m.mode))
+            for m in session.scalars(
+                select(Message).where(
+                    Message.state == MessageState.SENT.value, Message.rfc_message_id.is_(None)
+                )
+            )
+        ]
+    results: dict[int, str] = {}
+    for message_id, mode in pending:
+        transport = transports.get(mode)
+        results[message_id] = (
+            "pending"
+            if transport is None
+            else verify_sent_headers(session_factory, transport, clock, message_id)
+        )
+    return results
+
+
 def startup_recovery(
     session_factory: sessionmaker[Session],
     transports: Mapping[Mode, MailTransport],
     syncs: Mapping[str, sync_svc.MailboxSync],
     clock: Clock,
 ) -> dict[str, object]:
-    """Spec §9.4 order: reconcile -> sync -> missed-window rule. Dispatch only afterwards."""
+    """Spec §9.4 order: reconcile -> sync -> missed-window rule. Dispatch only afterwards.
+
+    After reconciling, sent messages whose provider-observed thread/header data is not
+    yet verified are re-read (metadata only, never a send; M06). Until P2/P3 add
+    in-process re-checks, this is the only retry of a failed post-send read.
+    """
     reconciled = reconcile_unresolved(session_factory, transports, clock)
+    headers = verify_unverified_sent(session_factory, transports, clock)
     sync_results = {key: sync.sync_now() for key, sync in syncs.items()}
     with transaction(session_factory) as session:
         missed = scheduling.apply_missed_window_rule(session, clock.now(), load_settings(session))
-    return {"reconciled": reconciled, "sync": sync_results, "missed_window": missed}
+    return {
+        "reconciled": reconciled,
+        "thread_headers": headers,
+        "sync": sync_results,
+        "missed_window": missed,
+    }

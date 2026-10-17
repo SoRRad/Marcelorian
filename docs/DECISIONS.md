@@ -28,17 +28,17 @@ the disagreement is a bug to report.
 | B5 | Follow-up revoke and stop | **Revoke**: approved, unclaimed follow-up → `awaiting_approval`; slot kept. **"Stop this follow-up sequence"**: no further generation/dispatch; slot kept until the applicant closes with a reason or deliberately re-drafts the next unsent step. A sent step is never re-drafted. Cancelling a claimed message is not a recall: future steps stop and the attempt is reconciled. A Cancel button never clears an uncertain attempt. | §3, §9.1, §16 | P0 (service); UI wording P2 | `services/approvals.py`; `tests/service/test_approvals.py`, `tests/service/test_gateway_race.py` |
 | B6 | Lowering caps | New limits apply to new initial submissions, including already-reserved unsent initials. These are marked `over_capacity` (approvals and records kept). This may need applicant action: cancel an excess campaign, restore the limit, or wait for a contacted campaign to release capacity. Rolling windows are never promised to resolve it. Cancelling either of two blocked initials releases its reservations and unblocks the other. No hidden lock, no automatic cancellation. Follow-ups need no new slot but still obey the 24 h budget, pacing, windows, approval, and reply checks. A cap-only deferral is not by itself a missed window (a window whose only evaluations ran without a current sync still goes to review, §9.4). | §11, §19 (6) | P0 | `services/reservations.py`, `services/gateway.py`; `tests/service/test_cap_reduction.py` |
 | B7 | Missed-window policy | Re-approval is required when an assigned eligible window passes with **no functioning dispatch/safety evaluation** during the portion in which the approved message could have been considered, because the worker or required connectivity/sync was unavailable. Evaluations and their deferral reasons are recorded; a process heartbeat is not proof of Gmail coverage. Approval near a window's end counts only the remaining portion. Missing recovery evidence → review. Brief restarts, pacing/cap deferrals, deliberate persistent pause, and deliberate mode switches do not by themselves invalidate approval. | §9.4, §19 (17), §21 | P0 | `services/scheduling.py` (`apply_missed_window_rule`); `tests/service/test_missed_window.py` |
-| B8 | Pacing | Spacing is serialized and persisted across actual Gmail submissions in live **and** transport_test, regardless of PI time zone. Sandbox has separate simulated pacing. Restarts and mode switches do not reset spacing. A test-window override does not bypass pacing. | §9.4, §11 | P0 | `services/pacing.py`, `pacing_state` table; `tests/service/test_gateway.py` (pacing), `tests/service/test_modes.py` (shared ledger) |
+| B8 | Pacing | Spacing is serialized and persisted across actual Gmail submissions in live **and** transport_test, regardless of PI time zone. Sandbox has separate simulated pacing. Restarts and mode switches do not reset spacing. A test-window override does not bypass pacing. | §9.4, §11 | P0 | `services/pacing.py`, `pacing_state` table; `tests/service/test_gateway.py` (pacing), `tests/service/test_modes.py` (shared ledger); `tests/service/repair/test_m01_*.py` (pacing at actual submission) |
 | B9 | Mode behavior | One active dispatch/generation mode. Gmail sync and reconciliation continue for all real campaigns of the connected mailbox, including inactive-mode ones. A mailbox-level cursor/coverage record is valid only after both real modes' full range is processed. A mode switch is an intentional pause, not a missed window. Dispatch resumes explicitly. Switching never changes a stored message's mode. | §3, §9.4, §12 | P0 (mode/pause state, gateway checks); sync P3 | `services/runtime.py`; `tests/service/test_modes.py` |
-| B10 | Current sync and final authorization | An incremental sync runs right before sending. A global unresolved gap blocks all real sends. A thread-specific problem pauses only that campaign; mailbox/credential failures are never mislabeled thread-specific. After network preflight, the atomic claim re-reads message, approval, campaign stop/review status, active mode, persistent pause, do-not-contact, reservations, and budget. Due time, window, pause/cancellation, and pacing are rechecked immediately before Gmail is invoked; if preflight crosses the window end in PI local time (11:00 by default; W1), nothing is submitted. The cancel/submit hand-off is serialized. Recall is not promised after the claim commits. No DB transaction is held across network calls. | §9.6, §10 (Known limit), §19 (25) | P0 | `services/gateway.py`; `tests/service/test_gateway_race.py` |
+| B10 | Current sync and final authorization | An incremental sync runs right before sending. A global unresolved gap blocks all real sends. A thread-specific problem pauses only that campaign; mailbox/credential failures are never mislabeled thread-specific. After network preflight, the atomic claim re-reads message, approval, campaign stop/review status, active mode, persistent pause, do-not-contact, reservations, and budget. Due time, window, pause/cancellation, and pacing are rechecked immediately before Gmail is invoked; if preflight crosses the window end in PI local time (11:00 by default; W1), nothing is submitted. The cancel/submit hand-off is serialized. Recall is not promised after the claim commits. No DB transaction is held across network calls. | §9.6, §10 (Known limit), §19 (25) | P0 | `services/gateway.py`; `tests/service/test_gateway_race.py`; `tests/service/repair/test_m01_*.py` (bounded hand-off, note 28) |
 | B11 | New-thread replies, test contacts | A possible reply from a known PI address in a **new** thread pauses for confirmation (`ambiguous_thread`) instead of freeing capacity. A test address stands in for the PI only inside its transport_test mapping. One active transport_test campaign per allowlisted recipient. Known real-PI addresses are rejected from the allowlist. Test addresses are never promoted into live identities. | §10, §12 | P0 (allowlist, mapping, uniqueness); classifier P3 | `services/recipients.py`, `domain/recipients.py`, `domain/mime.py`; `tests/unit/test_domain_pure.py`, `tests/service/test_modes.py`, `tests/service/test_review_round2.py` |
-| B12 | Message identifiers | RFC Message-ID = unique opaque value + the verified sender's email domain, never the hostname. A distinct value per authorized attempt, kept through that attempt's reconciliation and never regenerated after an empty search. `X-Marcelorian-Id` is kept: opaque value, no personal data, visible correlation header (not a secret). It is added to the metadata-header allowlist for the P0.3 preservation test. Message-ID is evidence, not a provider idempotency guarantee. | §9.6, §10 | P0 | `domain/identifiers.py`, `domain/gmail_params.py`; `tests/unit/test_domain_pure.py`, `tests/service/test_gateway.py` |
-| B13 | Resolving uncertainty | Budget is released only when definite non-submission is supported and recorded, never because a Sent search is empty. A fresh approval is required before another attempt. Recovery never forces the campaign to `outreach_pending` or restarts a stopped sequence. A late successful result never overwrites a newer conversation/closed state. A genuine reply frees the pending slot but not an unresolved submission/contact ledger entry. One resolved pause reason never clears another. The established actual submission time drives accounting and intervals; reconciliation time and provenance are kept too; uncertain timestamp evidence → review. | §3, §9.6, §11 | P0 | `domain/transitions.py`, `services/campaigns.py`, `services/reconciliation.py`, `services/send_results.py`; `tests/service/test_recovery.py` |
-| B14 | Prior-contact review | Options: "acknowledge these reviewed messages and proceed" or "close". Acknowledgment is scoped to mailbox + campaign + exact Gmail IDs. It never ignores future mail, bypasses do-not-contact, or permits a duplicate sequence. Search uses exact known addresses, full pagination, spam/trash included, drafts excluded. Hits show minimal metadata + "Open in Gmail"; no bodies or snippets. An incomplete search is not a clean result. New unacknowledged hits trigger review. The app's own attempts are reconciled first. | §9.6 | P0 (service, query); UI P2/P3 | `services/prior_contact.py`; `tests/service/test_inbound_and_contact.py`, `tests/service/test_review_round2.py` |
+| B12 | Message identifiers | RFC Message-ID = unique opaque value + the verified sender's email domain, never the hostname. A distinct value per authorized attempt, kept through that attempt's reconciliation and never regenerated after an empty search. `X-Marcelorian-Id` is kept: opaque value, no personal data, visible correlation header (not a secret). It is added to the metadata-header allowlist for the P0.3 preservation test. Message-ID is evidence, not a provider idempotency guarantee. | §9.6, §10 | P0 | `domain/identifiers.py`, `domain/gmail_params.py`; `tests/unit/test_domain_pure.py`, `tests/service/test_gateway.py`; `tests/service/repair/test_m06_*.py` (provider-observed Message-ID, note 31) |
+| B13 | Resolving uncertainty | Budget is released only when definite non-submission is supported and recorded, never because a Sent search is empty. A fresh approval is required before another attempt. Recovery never forces the campaign to `outreach_pending` or restarts a stopped sequence. A late successful result never overwrites a newer conversation/closed state. A genuine reply frees the pending slot but not an unresolved submission/contact ledger entry. One resolved pause reason never clears another. The established actual submission time drives accounting and intervals; reconciliation time and provenance are kept too; uncertain timestamp evidence → review. | §3, §9.6, §11 | P0 | `domain/transitions.py`, `services/campaigns.py`, `services/reconciliation.py`, `services/send_results.py`; `tests/service/test_recovery.py`; `tests/service/repair/test_m01_*.py`, `test_r3_recovery_snapshot_containment.py` |
+| B14 | Prior-contact review | Options: "acknowledge these reviewed messages and proceed" or "close". Acknowledgment is scoped to mailbox + campaign + exact Gmail IDs. It never ignores future mail, bypasses do-not-contact, or permits a duplicate sequence. Search uses exact known addresses, full pagination, spam/trash included, drafts excluded. Hits show minimal metadata + "Open in Gmail"; no bodies or snippets. An incomplete search is not a clean result. New unacknowledged hits trigger review. The app's own attempts are reconciled first. | §9.6 | P0 (service, query); UI P2/P3 | `services/prior_contact.py`; `tests/service/test_inbound_and_contact.py`, `tests/service/test_review_round2.py`; `tests/service/repair/test_m03_*.py` (overlapping acknowledgments, note 27) |
 | B15 | Email format | Plain-text body, no tracking. Applicant-approved professional URLs (e.g., ORCID) are allowed. Email 2 says "my earlier email" (not "my note below"). No automatic recursive quoting in v1. CV attachments required on Emails 1 and 4. | §8.1, §9.7 | P0 (plain-text MIME); templates P2 | `domain/mime.py`; `tests/unit/test_domain_pure.py` |
 | B16 | Adjustable caps | No hardcoded ceilings. Defaults: 25 real submissions/rolling 24 h, 2 pending per institution, 1 per lab, 3 new contacts per institution/rolling 30 days. Values must be finite and sensible. Increases above defaults need explicit confirmation and are audited. Pacing stays positive (default 2–6 min). No control can disable approval, recipient validation, uncertainty handling, or reply checks. Debug settings are impossible in live. | §1, §11, §16 | P0 | `config/settings.py`; `tests/service/test_settings.py` |
 | B17 | Budget meaning | "Reminders" = Emails 2–4. Live + transport_test share the real-submission ledger; sandbox never consumes it. Each attempt counts once (hold converts to usage). Definite non-acceptance releases the hold; uncertainty keeps it until resolved. A lowered 24 h budget can block follow-ups too. | §11 | P0 | `services/budget.py`; `tests/service/test_recovery.py` (held-budget transitions, 24 h boundary) |
-| B18 | Profile edits | Changing a fact, signature field, role phrase, or other value used by an unsent approved message → re-approval. Unrelated edits do not. Per-dependency versions are recorded, not a global profile version check. Final contact/timezone checks also apply at dispatch. | §4, §8.3, §9.1 | P0 | `approval_dependency` table, `services/approvals.py`; `tests/service/test_approvals.py` |
+| B18 | Profile edits | Changing a fact, signature field, role phrase, or other value used by an unsent approved message → re-approval. Unrelated edits do not. Per-dependency versions are recorded, not a global profile version check. Final contact/timezone checks also apply at dispatch. | §4, §8.3, §9.1 | P0 | `approval_dependency` table, `services/approvals.py`; `tests/service/test_approvals.py`; `tests/service/repair/test_m05_*.py` (withdrawal, note 29), `test_m02_*.py` (sender, note 32) |
 | B19 | CV versions | A new CV upload never changes or invalidates an approved frozen attachment. The UI shows the queued version and offers revoke/re-draft. Replacing the attachment **of that message** invalidates its approval. Acceptance test 9 corrected. | §9.1, §19 (9, 10) | P0 | `services/approvals.py`; `tests/service/test_approvals.py` |
 | B20 | Approval prerequisites | Approval requires a verified time zone, a send-ready exact recipient, and a reviewed salutation. Role/affiliation uncertainty and eligibility/funding flags are surfaced honestly. Mutable safety/contact prerequisites are rechecked at dispatch. | §6, §9.1, §9.6 | P0 | `services/approvals.py`, `services/gateway.py`; `tests/service/test_approvals.py` |
 | C1 | Funding preference | Unknown funding stays eligible and marked. The preference formerly called "paid only" is renamed **"Exclude explicitly unpaid opportunities; unknown funding allowed."** Pilot default stays "paid preferred, unpaid acceptable". Neither a grant nor a listing without stated compensation makes an appointment explicitly paid. | §4, §7, §19 (40) | Doc (P1/P2) | — |
@@ -74,7 +74,10 @@ widening decision W1. None of them changes a decision.
    call separates that commit from `messages.send`; the MIME is built from the
    snapshot before the claim. Cancellation committed before the claim prevents
    submission. Cancellation after it is recorded as a stop request and the
-   attempt is reconciled.
+   attempt is reconciled, unless the gateway never invoked Gmail (note 28), in
+   which case the attempt is recorded not submitted and the cancel takes effect.
+   The point of no recall stays the claim commit; the hand-off after it is
+   bounded (note 28).
 3. **Missed-window evidence.** Dispatch evaluations are stored per message
    with `functioning` set only when the worker ran with valid authorization and
    a current sync: Gmail coverage at most 15 minutes old (three 5-minute polling
@@ -140,7 +143,8 @@ widening decision W1. None of them changes a decision.
     applicant re-drafts first.
 14. **Confirmed-sent resolution.** Resolving an uncertain attempt as sent
     requires its Gmail message and thread IDs, so follow-ups can thread on the
-    real conversation.
+    real conversation. Those IDs are verified by a metadata read before the
+    next step can be approved (note 31).
 15. **Settings sanity.** The N-day final interval is limited to 1–365 days.
     Blackout settings that leave no send day for 365 days or more are rejected.
     The check scans a full 28-year calendar cycle plus one year (weekday/date
@@ -158,9 +162,10 @@ widening decision W1. None of them changes a decision.
     ended, so no evaluation counts twice. Deferrals for `outside_window`,
     `not_due`, `paused` and `mode_inactive` are never treated as consideration.
     A mailbox-level sync gap is checked before any cap or pacing deferral.
-17. **Reconnect clears the auth block.** A verified (re)connection with both
-    required scopes clears the global Gmail auth block. A connection missing a
-    scope keeps it.
+17. **Reconnect clears the auth block.** A verified reconnection of the bound
+    identity, or a permitted setup-only switch (note 32), with both required
+    scopes clears the global Gmail auth block. A connection missing a scope
+    keeps it. A refused switch changes nothing, the block included.
 18. **Changes during preflight.** If the message was claimed, revoked or
     re-approved by another caller during the network preflight, the result is
     `changed_during_preflight` and nothing about the message is altered.
@@ -212,3 +217,98 @@ widening decision W1. None of them changes a decision.
     confirmation when any (weekday, time) it allows is allowed by neither the
     default nor the previous window, not when a single key exceeds both. The
     windows are half-open, so touching intervals cover each other.
+
+### Owner P0 repair review (M01–M06, 2026-10-17)
+
+The owner's review of snapshot `4d3a16b` reported six findings. Each was
+reproduced with a failing test (fake Gmail, synthetic data, injected clock)
+before the fix; the tests live in `tests/service/repair/`. The review file
+itself was not available in this session, so the reproductions follow the
+owner's written description of each finding.
+
+27. **Overlapping prior-contact acknowledgments (M03).** Two open reviews for
+    one campaign may list overlapping exact Gmail IDs (two callers racing the
+    Email 1 preflight). Acknowledging a review reuses an existing
+    acknowledgment of the same mailbox + campaign + Gmail ID (its first time
+    and actor are kept), inserts only new IDs, and never resolves another open
+    review or acknowledges by sender. The audit row names the review, the new
+    IDs and the IDs already acknowledged. The read-then-insert runs inside the
+    caller's BEGIN IMMEDIATE transaction; the unique key is unchanged.
+28. **Bounded claim hand-off (M01).** The claim takes the write lock before
+    reading the clock and computes `not_after` = the earliest of the assigned
+    window end, the current policy window's end (not for an approved
+    always-open test override) and `claim + SUBMIT_HANDOFF_LIMIT` (5 s, an
+    implementation value the owner may change). Immediately before the single
+    transport call the gateway re-reads the wall clock (never a monotonic clock,
+    which excludes suspend): earlier than the claim → `clock_moved_backwards`;
+    at or after `not_after` → `handoff_expired` or `window_end_reached`. Then
+    `send` is never called and `send_results.record_not_invoked` records the
+    attempt `not_submitted` with resolution `not_invoked` (distinct from the
+    applicant's `definite_non_submission`), releases the budget hold, moves the
+    message `sending → needs_reapproval` (no blind retry; a fresh approval gets
+    a new Message-ID), opens no `send_uncertain` review, and completes a cancel
+    recorded after the claim (note 11). If that record fails, the attempt stays
+    `in_flight` and startup recovery treats it as ambiguous. Pacing is anchored
+    at `not_after`, so actual Gmail calls are at least the pacing minimum apart.
+    A pause, cancel or reply inside the hand-off still cannot stop the call (spec
+    §10 Known limit, now bounded). The real adapter's `send` must do no network
+    I/O before its single request (P0.3 contract). **Owner choices made
+    conservatively:** a known-not-invoked message needs re-approval rather than
+    rolling to the next window, and the limit is 5 s.
+29. **Fact confirmation withdrawal (M05).** `update_fact`'s `confirm` is the
+    status the fact has after the call. `confirm=False` on a confirmed fact with
+    unchanged text withdraws the confirmation: version bumped, audited as
+    `confirmation_withdrawn` (confirmed → proposed), and only `approved_queued`
+    messages whose snapshot cites the fact move to `needs_reapproval`. Drafts
+    citing it are refused with `fact_not_confirmed`, and after re-confirmation
+    with `dependency_changed_since_draft` until re-drafted. The same text with
+    the same status is a no-op. The claim (`dependencies_current`) also refuses
+    any cited fact that is not confirmed, whatever its version. P1 autosave must
+    call `update_fact` only on a real change.
+30. **Post-Email-4 hold (M04).** The optional hold is the pending-slot row kept
+    active with `hold_until`; occupancy ignores it from `hold_until` on (lazy
+    expiry, no sweeper). Entering `conversation` or `closed` (a genuine reply or
+    any closed outcome, as spec §3 lists) releases it at once in
+    `set_campaign_state`. Consumed new-contact rows are never touched.
+31. **Provider-observed Message-ID (M06).** `message.rfc_message_id` now means
+    the provider-observed RFC Message-ID, set only after a metadata read
+    verifies the SENT label, Gmail ID, thread (the campaign thread for steps
+    2–4), identity (our X-Marcelorian-Id or Message-ID), recipient and a
+    well-formed `<…@…>` header (which also blocks header injection); NULL on a
+    sent message means unverified. The generated ID stays on the attempt for the
+    `rfc822msgid` search (B12, test 65). The gateway reads metadata once after
+    the success commit, with no transaction held, and returns SENT whatever the
+    read does; reconciliation records the matched copy's header; applicant-
+    confirmed IDs are verified the same way. Until verified, the next step
+    cannot be approved (`thread_headers_unverified`) and a queued one is blocked
+    at the claim. A failed read never resends; startup recovery is the only
+    re-check until P2/P3 add in-process ones (the P2 confirm flow and the P3
+    worker cycle must call `verify_unverified_sent`). Mismatches are audited and
+    keep follow-ups held; the way out is close or stop (no new pause reason).
+    **Accepted P0 limitation:** the sandbox mailbox lives in memory, so a crash
+    between the success commit and the read holds that practice sequence
+    (fail-closed) until P2 persists it; sandbox is not special-cased (§12).
+    Tests use FakeGmailTransport rewrites only; live preservation is untested
+    until P0.3.
+32. **Mailbox identity binding (M02).** Identity is the canonical primary
+    address reported by the provider (no stable account ID without a scope
+    beyond `gmail.send`/`gmail.readonly`; a renamed primary address therefore
+    counts as a different identity). The bound identity is the latest mailbox
+    row, or, if none exists, the senders recorded in real-mode history.
+    Real-mode history is any live or transport_test campaign (any state),
+    attempt or inbound event. `connect_mailbox` checks first, inside its
+    transaction and before any write: the same identity may always reconnect
+    (row and version kept); a different identity after history is refused
+    (`MailboxIdentityRefused`) with nothing changed; before history it is a
+    setup-only switch that deactivates the old row (version bumped), resets the
+    real sync row (no cursor, coverage, gap or error inherited) and clears live
+    readiness. The B18 sender dependency stays as defence in depth. P0.3
+    connect flow: read the profile with the new token outside any transaction,
+    call `connect_mailbox`, and store the token only after it commits; a refusal
+    discards the token. P3 sync must re-check the bound identity inside the
+    transaction that persists the cursor.
+33. **Snapshot containment in recovery (round-3 #19).** A snapshot failing its
+    hash during reconciliation marks that attempt uncertain (budget and slot
+    held, a review opened, no search, no send) and recovery continues; during
+    the post-send header check it leaves the message unverified; in
+    `_schedule_next` it sends the schedule to review without undoing the send.

@@ -275,7 +275,7 @@ def test_fact_change_invalidates_only_dependent_approvals(world) -> None:
     assert world.message_state(mid_b) is MessageState.APPROVED_QUEUED
 
 
-@pytest.mark.parametrize("change", ["salutation", "timezone", "recipient", "sender"])
+@pytest.mark.parametrize("change", ["salutation", "timezone", "recipient", "sender_row_changed"])
 def test_dependency_changes_invalidate(world, change) -> None:
     world.connect_mailbox()
     world.set_mode(Mode.LIVE)
@@ -302,10 +302,33 @@ def test_dependency_changes_invalidate(world, change) -> None:
             email = s.scalars(select(PiEmail).where(PiEmail.pi_id == pi)).one()
             approvals.update_pi_email(s, email, confidence="C", actor=Actor.APPLICANT, now=now)
         else:
-            approvals.connect_mailbox(
-                s, "other-applicant@example.test", frozenset(), actor=Actor.APPLICANT, now=now
-            )
+            # A different account can no longer be connected once real history exists (M02),
+            # so a changed sender row can only come from an older database; the approval
+            # dependency still catches it at the claim (acceptance 9, defence in depth).
+            from marcelorian.db.models import MailboxAccount
+
+            s.scalars(select(MailboxAccount)).one().version += 1
+    if change == "sender_row_changed":
+        assert world.dispatch(mid).reason == "dependency_changed"
+        return
     assert world.message_state(mid) is MessageState.NEEDS_REAPPROVAL  # acceptance 9
+
+
+def test_switching_sender_account_after_real_history_is_refused(world) -> None:
+    """M02: a different Gmail account is refused and nothing is changed."""
+    world.connect_mailbox()
+    world.set_mode(Mode.LIVE)
+    mid = world.draft_and_approve(world.campaign(world.pi(world.institution()), Mode.LIVE))
+    with transaction(world.factory) as s, pytest.raises(approvals.MailboxIdentityRefused) as info:
+        approvals.connect_mailbox(
+            s,
+            "other-applicant@example.test",
+            frozenset(),
+            actor=Actor.APPLICANT,
+            now=world.clock.now(),
+        )
+    assert info.value.reasons == ["mailbox_identity_switch_after_real_history"]
+    assert world.message_state(mid) is MessageState.APPROVED_QUEUED
 
 
 def test_mode_is_bound_into_the_snapshot(world) -> None:
