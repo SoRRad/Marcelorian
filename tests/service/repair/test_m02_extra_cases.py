@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import select
 
 from marcelorian.db.engine import transaction
@@ -11,6 +12,7 @@ from marcelorian.domain.gmail_params import REQUIRED_SCOPES
 from marcelorian.services import approvals, runtime
 from marcelorian.services.sync import record_sync_success
 from tests.factories import APPLICANT_EMAIL
+from tests.fakes.gmail import FakeGmailTransport
 
 OTHER = "different-applicant@example.test"
 
@@ -96,3 +98,30 @@ def test_setup_switch_round_trip_then_history_binds_latest(world) -> None:
     assert _connect(world, "  " + OTHER.upper()) is None
     accounts_after, _, _ = _snap(world)
     assert accounts_after == accounts_before
+
+
+def test_setup_only_switch_while_live_leaves_live_mode(world) -> None:
+    """Readiness completed for account A never carries live mode over to account B."""
+    world.connect_mailbox()
+    world.set_mode(Mode.LIVE)  # readiness completed for A; no real history yet
+    world.gmail = FakeGmailTransport(clock=world.clock, account_email=OTHER)
+    world.rebuild_gateway()
+    assert _connect(world, OTHER) is None  # permitted setup-only switch
+
+    with transaction(world.factory) as s:
+        view = runtime.get_runtime(s, world.clock.now())
+    assert (view.active_mode, view.dispatch_paused, view.live_readiness_complete) == (
+        Mode.SANDBOX,
+        True,
+        False,
+    )
+    with transaction(world.factory) as s, pytest.raises(runtime.ModeSwitchError):
+        runtime.switch_mode(
+            s, Mode.LIVE, confirmed=True, actor=Actor.APPLICANT, now=world.clock.now()
+        )
+
+    # A live Email 1 can be neither approved nor sent from B.
+    camp = world.campaign(world.pi(world.institution()), Mode.LIVE)
+    with pytest.raises(approvals.ApprovalError, match="mode_not_active"):
+        world.draft_and_approve(camp)
+    assert world.gmail.send_calls == []

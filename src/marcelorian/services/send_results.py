@@ -378,7 +378,9 @@ def attempt_by_uid(session: Session, attempt_uid: str) -> SendAttempt:
     return attempt
 
 
-_RFC_ID = re.compile(r"^<[^<>@\s]+@[^<>@\s]+>$")
+# msg-id (RFC 5322 §3.6.4) as dot-atom text: printable ASCII only, no specials,
+# whitespace or control characters, so a provider value cannot inject headers.
+_RFC_ID = re.compile(r"^<[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+@[A-Za-z0-9!#$%&'*+/=?^_`{|}~.\[\]-]+>$")
 
 
 def sent_attempt_for(session: Session, message: Message) -> SendAttempt | None:

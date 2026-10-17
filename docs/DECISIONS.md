@@ -129,7 +129,8 @@ widening decision W1. None of them changes a decision.
     test mail there stays an ordinary, reviewable hit.
 11. **A cancel recorded during submission.** It takes effect once
     non-submission is definite (definite rejection, or recorded non-submission
-    of an uncertain attempt). An Email 1 then follows the B3 path (campaign
+    of an uncertain attempt, or the gateway's own record that it never invoked
+    Gmail, note 28). An Email 1 then follows the B3 path (campaign
     back to `candidate`, reservations released); a follow-up is cancelled.
     Approval is refused while such a request is pending; a deliberate re-draft
     clears it.
@@ -269,7 +270,9 @@ owner's written description of each finding.
     active with `hold_until`; occupancy ignores it from `hold_until` on (lazy
     expiry, no sweeper). Entering `conversation` or `closed` (a genuine reply or
     any closed outcome, as spec §3 lists) releases it at once in
-    `set_campaign_state`. Consumed new-contact rows are never touched.
+    `set_campaign_state`. A hold that already lapsed is recorded as released at
+    `hold_until` with reason `hold_lapsed`, not as ended by the later reply or
+    closure. Consumed new-contact rows are never touched.
 31. **Provider-observed Message-ID (M06).** `message.rfc_message_id` now means
     the provider-observed RFC Message-ID, set only after a metadata read
     verifies the SENT label, Gmail ID, thread (the campaign thread for steps
@@ -302,7 +305,9 @@ owner's written description of each finding.
     (`MailboxIdentityRefused`) with nothing changed; before history it is a
     setup-only switch that deactivates the old row (version bumped), resets the
     real sync row (no cursor, coverage, gap or error inherited) and clears live
-    readiness. The B18 sender dependency stays as defence in depth. P0.3
+    readiness. Clearing readiness while live mode is active moves to sandbox
+    with dispatch paused (audited `mode_switched`), so live mode is never
+    active without readiness; re-entering live needs the checklist again. The B18 sender dependency stays as defence in depth. P0.3
     connect flow: read the profile with the new token outside any transaction,
     call `connect_mailbox`, and store the token only after it commits; a refusal
     discards the token. P3 sync must re-check the bound identity inside the

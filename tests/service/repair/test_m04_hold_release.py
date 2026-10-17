@@ -241,7 +241,8 @@ def test_reply_after_expiry_leaves_no_active_slot_row(world) -> None:
     assert world.campaign_row(camp).state == CampaignState.CONVERSATION.value
     slot = _rows(world, camp)["pending_slot"]
     assert slot.status == "released"
-    assert slot.released_at is not None and slot.released_at >= hold_until
+    # The hold lapsed on its own; the later reply does not get recorded as ending it.
+    assert (slot.released_at, slot.release_reason) == (hold_until, "hold_lapsed")
     _assert_history_preserved(world, inst, camp, m1)
 
 

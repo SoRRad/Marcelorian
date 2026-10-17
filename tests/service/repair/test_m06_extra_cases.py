@@ -117,16 +117,30 @@ def test_crash_during_post_send_read_then_restart_verifies_without_resend(
     assert follow["in_reply_to"] == stored_id(live, m1)
 
 
-# 2. A provider-observed value is now copied into outgoing headers: CRLF must not inject.
-def test_observed_message_id_with_crlf_is_never_threaded(
-    live: World, monkeypatch: pytest.MonkeyPatch
+# 2. A provider-observed value is now copied into outgoing headers: CRLF must not inject,
+#    and control characters or RFC 5322 specials are refused as malformed.
+@pytest.mark.parametrize(
+    "value",
+    [
+        "<x@mail.gmail.test>\r\nBcc: evil@example.test",
+        "<x\x00y@mail.gmail.test>",
+        "<x\x7fy@mail.gmail.test>",
+        "<x\u2028y@mail.gmail.test>",
+        '<x"y@mail.gmail.test>',
+        "<x,y@mail.gmail.test>",
+        "<x(y)@mail.gmail.test>",
+    ],
+    ids=["crlf", "nul", "del", "line-sep", "quote", "comma", "comment"],
+)
+def test_observed_message_id_malformed_is_never_threaded(
+    live: World, monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
     original = FakeGmailTransport.get_message_metadata
 
     def hostile(gid: str) -> MessageMeta:
         meta = original(live.gmail, gid)
         headers = dict(meta.headers)
-        headers["message-id"] = "<x@mail.gmail.test>\r\nBcc: evil@example.test"
+        headers["message-id"] = value
         return MessageMeta(
             meta.gmail_message_id, meta.thread_id, meta.internal_date, meta.label_ids, headers
         )

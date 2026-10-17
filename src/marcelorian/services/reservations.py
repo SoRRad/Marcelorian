@@ -294,6 +294,10 @@ def _end(
 ) -> None:
     row.status = status.value
     if status is ReservationStatus.RELEASED:
+        if row.hold_until is not None and row.hold_until <= now:
+            # The optional hold already stopped counting on its own: record it as
+            # lapsed then, not as ended by the event (reply, closure) that ends the row.
+            now, reason = row.hold_until, "hold_lapsed"
         row.released_at, row.release_reason = now, reason
 
 
