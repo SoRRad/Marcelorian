@@ -33,7 +33,7 @@ import logging
 import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 
 from sqlalchemy import select
@@ -75,7 +75,7 @@ from marcelorian.domain.identifiers import new_x_marcelorian_id, opaque_token, r
 from marcelorian.domain.mime import MimeAddressError, build_mime
 from marcelorian.domain.recipients import RecipientError, validate_recipient
 from marcelorian.domain.snapshot import SnapshotContent, SnapshotError, verify_canonical
-from marcelorian.domain.timing import SchedulingError, in_window, load_zone
+from marcelorian.domain.timing import SchedulingError, in_window, load_zone, next_window
 from marcelorian.services import (
     approvals,
     budget,
@@ -104,8 +104,15 @@ from marcelorian.transport.base import (
 log = logging.getLogger(__name__)
 
 
+#: Longest in-memory hand-off allowed between the claim commit and the transport call.
+#: The claim's checks (window, due, pause/cancel, pacing, current sync) are trusted only
+#: this long; a suspend or stall beyond it means the transport is never invoked.
+SUBMIT_HANDOFF_LIMIT = timedelta(seconds=5)
+
+
 class Outcome(StrEnum):
     SENT = "sent"
+    NOT_SUBMITTED = "not_submitted"
     FAILED_DEFINITE = "failed_definite"
     UNCERTAIN = "uncertain"
     DEFERRED = "deferred"
@@ -144,6 +151,14 @@ class _Plan:
     #: When this evaluation began. Every evaluation record of one dispatch uses it, so a
     #: preflight that crosses the window end still counts as considered in the window (B7).
     started: datetime
+
+
+@dataclass(frozen=True)
+class _Claim:
+    attempt_uid: str
+    claimed_at: datetime
+    #: Exclusive: the transport may be invoked only while claimed_at <= now < not_after.
+    not_after: datetime
 
 
 #: Classifies a new message found in a campaign thread during preflight.
@@ -230,8 +245,7 @@ class SendGateway:
         claimed = self._claim(plan, started, app_message_id, x_id, actor)
         if isinstance(claimed, DispatchResult):
             return claimed
-        attempt_uid = claimed
-        return self._submit(transport, plan, attempt_uid, raw, actor)
+        return self._submit(transport, plan, claimed, raw, actor)
 
     # ------------------------------------------------------------------ #
     # Checks
@@ -282,6 +296,16 @@ class SendGateway:
             return _Verdict(Outcome.DEFERRED, DeferralReason.CAMPAIGN_NOT_SENDABLE)
         if message.step > 1 and campaign.sequence_stopped:
             return _Verdict(Outcome.DEFERRED, DeferralReason.SEQUENCE_STOPPED)
+        if message.step > 1:
+            first_thread = session.scalar(
+                select(Message.gmail_thread_id).where(
+                    Message.campaign_id == campaign.id, Message.step == 1
+                )
+            )
+            refs = send_results.verified_references(session, campaign.id, message.step)
+            if refs is None or refs != content.references or content.thread_id != first_thread:
+                # Approval requires verified headers; anything else re-approves (M06).
+                return _Verdict(Outcome.BLOCKED, "thread_headers_unverified", invalidate=True)
         if content.test_override is not None and mode is not Mode.TRANSPORT_TEST:
             return _Verdict(Outcome.BLOCKED, "override_outside_transport_test", invalidate=True)
         if not approvals.dependencies_current(session, snapshot.id):
@@ -615,8 +639,12 @@ class SendGateway:
     # ------------------------------------------------------------------ #
     def _claim(
         self, plan: _Plan, started: datetime, app_message_id: str, x_id: str, actor: Actor
-    ) -> str | DispatchResult:
+    ) -> _Claim | DispatchResult:
         with transaction(self._factory) as session:
+            # Take the write lock (BEGIN IMMEDIATE) before reading the clock, so the
+            # claim's checks hold for the instant nothing else can change and a lock wait
+            # never eats into the submit hand-off (M01).
+            session.connection()
             now = self._clock.now()
             message = session.get(Message, plan.message_id)
             assert message is not None
@@ -628,6 +656,7 @@ class SendGateway:
                 return self._apply_verdict(session, message, verdict, now, plan.started)
             snapshot = session.get(ApprovalSnapshot, plan.snapshot_id)
             assert snapshot is not None
+            not_after = self._not_after(message, snapshot, settings, plan, now)
             attempt = SendAttempt(
                 attempt_uid=opaque_token(),
                 message_id=message.id,
@@ -658,10 +687,12 @@ class SendGateway:
             message.last_deferral_reason = None
             ledger = ledger_for(plan.mode)
             budget.hold(session, ledger, attempt.id, now)
+            # Anchored at the latest instant this submission may start, so spacing holds
+            # between actual transport calls, not just between claims (B8).
             pacing.record_submission(
                 session,
                 ledger,
-                now,
+                not_after,
                 self._rng,
                 settings.pacing_min_seconds,
                 settings.pacing_max_seconds,
@@ -676,14 +707,64 @@ class SendGateway:
                 entity_type="send_attempt",
                 entity_id=attempt.id,
                 action="claimed",
-                detail={"attempt": attempt.attempt_uid, "snapshot_sha256": snapshot.sha256},
+                detail={
+                    "attempt": attempt.attempt_uid,
+                    "snapshot_sha256": snapshot.sha256,
+                    "not_after": not_after.isoformat(),
+                },
                 mode=message.mode,
             )
-            return attempt.attempt_uid
+            return _Claim(attempt.attempt_uid, now, not_after)
+
+    @staticmethod
+    def _not_after(
+        message: Message,
+        snapshot: ApprovalSnapshot,
+        settings: AppSettings,
+        plan: _Plan,
+        now: datetime,
+    ) -> datetime:
+        """End of the hand-off: the window end (assigned and current policy) or the limit."""
+        assert message.eligible_window_end is not None  # checked by _verdict
+        bound = min(message.eligible_window_end, now + SUBMIT_HANDOFF_LIMIT)
+        policy = scheduling.policy_for(snapshot, settings)
+        if not policy.always_open:
+            bound = min(bound, next_window(now, load_zone(plan.content.pi_timezone), policy).end)
+        return bound
+
+    def _not_invoked(self, plan: _Plan, claim: _Claim, reason: str, actor: Actor) -> DispatchResult:
+        """Durably record that the transport was never called; never sends, never retries.
+
+        If this commit fails the attempt stays ``in_flight`` and startup recovery treats it
+        as ambiguous (uncertain): conservative, never a resend.
+        """
+        log.warning("claimed attempt %s not submitted: %s", claim.attempt_uid, reason)
+        try:
+            with transaction(self._factory) as session:
+                attempt = send_results.attempt_by_uid(session, claim.attempt_uid)
+                send_results.record_not_invoked(
+                    session, attempt, reason=reason, actor=actor, now=self._clock.now()
+                )
+        except Exception:
+            # Nothing was sent; the attempt stays in_flight (budget held) and startup
+            # recovery treats it as ambiguous. Never a transport call or retry here.
+            log.exception("could not record attempt %s as not invoked", claim.attempt_uid)
+            return DispatchResult(
+                Outcome.NOT_SUBMITTED, "not_invoked_record_failed", claim.attempt_uid
+            )
+        return DispatchResult(Outcome.NOT_SUBMITTED, reason, claim.attempt_uid)
 
     def _submit(
-        self, transport: MailTransport, plan: _Plan, attempt_uid: str, raw: bytes, actor: Actor
+        self, transport: MailTransport, plan: _Plan, claim: _Claim, raw: bytes, actor: Actor
     ) -> DispatchResult:
+        attempt_uid = claim.attempt_uid
+        # Final in-memory check, immediately before the one transport call (no DB, no network).
+        now = self._clock.now()
+        if now < claim.claimed_at:
+            return self._not_invoked(plan, claim, "clock_moved_backwards", actor)
+        if now >= claim.not_after:
+            stale = "handoff_expired" if now >= claim.claimed_at + SUBMIT_HANDOFF_LIMIT else None
+            return self._not_invoked(plan, claim, stale or "window_end_reached", actor)
         try:
             result = transport.send(raw, plan.content.thread_id)
         except DefiniteRejection as exc:
@@ -736,4 +817,13 @@ class SendGateway:
             # and startup recovery reconciles it; it is never sent again.
             log.exception("commit after accepted send failed for attempt %s", attempt_uid)
             return DispatchResult(Outcome.UNCERTAIN, "commit_failed_after_acceptance", attempt_uid)
+        try:
+            # After the commit: read the sent message back (metadata only) to record the
+            # provider-observed Message-ID and thread. A failure leaves it pending; the send
+            # is already recorded and is never repeated (M06).
+            reconciliation.verify_sent_headers(
+                self._factory, transport, self._clock, plan.message_id, actor=actor
+            )
+        except Exception:
+            log.exception("thread header check failed for message %s", plan.message_id)
         return DispatchResult(Outcome.SENT, None, attempt_uid)

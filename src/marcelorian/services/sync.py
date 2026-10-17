@@ -84,6 +84,22 @@ def close_sync_gap(session: Session, key: str, coverage_at: datetime, now: datet
     row.updated_at = now
 
 
+def reset_coverage(session: Session, key: str, now: datetime) -> None:
+    """Forget all coverage for a mailbox key (setup-only identity switch, M02).
+
+    The new identity inherits no history cursor, coverage time or gap from the old
+    one; the claim's freshness rule then requires a new successful sync before any
+    real send.
+    """
+    row = _row(session, key, now)
+    row.history_cursor = None
+    row.last_gmail_coverage_at = None
+    row.gap_open = False
+    row.gap_since = None
+    row.last_error = None
+    row.updated_at = now
+
+
 def coverage(session: Session, key: str, now: datetime) -> SyncState:
     return _row(session, key, now)
 

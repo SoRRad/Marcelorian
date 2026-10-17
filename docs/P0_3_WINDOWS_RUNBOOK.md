@@ -20,7 +20,11 @@ What it checks:
    follow-up goes in the same thread. Checked: `threadId`, `In-Reply-To` and
    `References`, the exact subject with the en dash, and a single `Re:`.
 3. **Identifiers:** whether Gmail keeps our `Message-ID` and the
-   `X-Marcelorian-Id` header, checked by reading **metadata only**.
+   `X-Marcelorian-Id` header, checked by reading **metadata only**, and that
+   Email 2's `In-Reply-To`/`References` equal the Message-ID Gmail stored for
+   Email 1 (provider-observed), with the app recording
+   `thread_headers_verified` for each send. Before this run, rewritten IDs were
+   only simulated with a fake transport (M06).
 4. **Reply handling:** the second address replies. The app sees the reply
    through history sync using metadata only, and the next follow-up is
    **not** sent.
@@ -30,7 +34,13 @@ What it checks:
 6. **History sync:** the cursor is saved only after every page of a range
    has been processed.
 7. *(Optional, L2)* **Reconnect:** after the token is revoked, dispatch
-   stops with "Gmail needs reconnecting", and resumes after reconnecting.
+   stops with "Gmail needs reconnecting", and resumes after reconnecting with
+   the **same** Google account. Once transport_test history exists, connecting
+   a different account is refused and changes nothing (M02).
+8. *(Optional)* **Sleep between claim and send:** not reproducible on demand
+   with a real laptop; the gateway refuses to call Gmail when the hand-off
+   after the claim exceeds 5 s or crosses the window end (M01). Note any
+   `not_submitted` attempt with resolution `not_invoked` in the report.
 
 At most **6 real submissions** in total, far below the 25-per-24-hours budget.
 

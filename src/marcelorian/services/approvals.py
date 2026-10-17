@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import func, select
@@ -30,6 +31,7 @@ from marcelorian.db.models import (
     Blob,
     Campaign,
     CvVersion,
+    InboundEvent,
     Institution,
     MailboxAccount,
     Message,
@@ -52,7 +54,7 @@ from marcelorian.domain.enums import (
     SnapshotState,
 )
 from marcelorian.domain.gmail_params import REQUIRED_SCOPES
-from marcelorian.domain.recipients import RecipientError, validate_recipient
+from marcelorian.domain.recipients import RecipientError, normalize_address, validate_recipient
 from marcelorian.domain.snapshot import (
     AttachmentRef,
     SnapshotContent,
@@ -70,7 +72,8 @@ from marcelorian.domain.timing import (
     load_zone,
 )
 from marcelorian.services import campaigns as campaign_svc
-from marcelorian.services import dnc, recipients, reservations, runtime, scheduling
+from marcelorian.services import dnc, recipients, reservations, runtime, scheduling, send_results
+from marcelorian.services import sync as sync_svc
 from marcelorian.services.audit import audit
 from marcelorian.services.reservations import CapacityResult
 from marcelorian.transport.sandbox import SANDBOX_SENDER
@@ -444,6 +447,8 @@ def approval_blockers(
             reasons.append("sequence_stopped")
         if message.due_at is None:
             reasons.append("due_time_missing")
+        if send_results.verified_references(session, campaign.id, message.step) is None:
+            reasons.append("thread_headers_unverified")
     facts, pi_version = draft_dependencies(message)
     for fact_id, drafted_version in facts:
         fact = session.get(ProfileFact, fact_id)
@@ -529,7 +534,9 @@ def approve(
     sent = _sent_messages(session, campaign)
     thread_id = sent[0].gmail_thread_id if sent and message.step > 1 else None
     references = (
-        tuple(m.rfc_message_id for m in sent if m.rfc_message_id) if message.step > 1 else ()
+        send_results.verified_references(session, campaign.id, message.step) or ()
+        if message.step > 1
+        else ()
     )
     attachments = _attachment_refs(session, json.loads(message.draft_attachments_json or "[]"))
     version = (
@@ -848,29 +855,43 @@ def dependencies_current(session: Session, snapshot_id: int) -> bool:
             return False
         if kind is DependencyKind.ALLOWLIST_ENTRY and not row.active:
             return False
+        # Only confirmed facts are ever sent (spec §4, §8.3), whatever the version says.
+        if kind is DependencyKind.PROFILE_FACT and row.status != FactStatus.CONFIRMED.value:
+            return False
     return True
 
 
 def update_fact(
     session: Session, fact: ProfileFact, value: str, *, confirm: bool, actor: Actor, now: datetime
 ) -> list[int]:
-    """Edit a fact; bumps its version and invalidates only approvals that use it (B18)."""
-    if value == fact.value and (not confirm or fact.status == FactStatus.CONFIRMED.value):
+    """Set a fact's text and status; invalidates only unsent approvals that use it (B18).
+
+    ``confirm`` is the status the fact has *after* the call: True leaves it confirmed,
+    False leaves it proposed. So ``confirm=False`` with unchanged text withdraws an
+    existing confirmation (M05). A call that changes neither the text nor the status
+    is a no-op: no version bump, no audit, no invalidation. Every real change bumps
+    the version (spec §4).
+    """
+    target = FactStatus.CONFIRMED if confirm else FactStatus.PROPOSED
+    previous = FactStatus(fact.status)
+    if value == fact.value and previous is target:
         return []
+    withdrawn = value == fact.value and previous is FactStatus.CONFIRMED
     fact.value = value
     fact.version += 1
     fact.updated_at = now
+    fact.status = target.value
     if confirm:
-        fact.status, fact.confirmed_at = FactStatus.CONFIRMED.value, now
-    else:
-        fact.status = FactStatus.PROPOSED.value
+        fact.confirmed_at = now
     audit(
         session,
         at=now,
         actor=actor,
         entity_type="profile_fact",
         entity_id=fact.id,
-        action="updated",
+        action="confirmation_withdrawn" if withdrawn else "updated",
+        from_state=previous.value,
+        to_state=target.value,
         detail={"version": fact.version, "status": fact.status},
     )
     return invalidate_dependents(
@@ -879,7 +900,7 @@ def update_fact(
         fact.id,
         actor=actor,
         now=now,
-        reason="profile fact changed",
+        reason="profile fact confirmation withdrawn" if withdrawn else "profile fact changed",
     )
 
 
@@ -1007,34 +1028,133 @@ def upload_cv(
     return cv
 
 
+class MailboxIdentityRefused(RuntimeError):
+    """A Gmail connection that would move real-mode history to another identity (M02)."""
+
+    def __init__(self, reasons: list[str]) -> None:
+        super().__init__("; ".join(reasons))
+        self.reasons = reasons
+
+
+class ConnectionKind(StrEnum):
+    FIRST = "first"
+    SAME_IDENTITY = "same_identity"
+    SETUP_SWITCH = "setup_switch"
+
+
+_REAL_MODES = (Mode.LIVE.value, Mode.TRANSPORT_TEST.value)
+
+
+def real_mode_history_exists(session: Session) -> bool:
+    """Any live/transport_test campaign, attempt or mailbox record (any state).
+
+    Such records belong to the connected mailbox: thread ids, Message-IDs, reply and
+    prior-contact evidence, and attempts that reconciliation must find there.
+    Sandbox records never count.
+    """
+    checks = (
+        select(Campaign.id).where(Campaign.mode.in_(_REAL_MODES)),
+        select(SendAttempt.id).where(SendAttempt.mode.in_(_REAL_MODES)),
+        select(InboundEvent.id).where(InboundEvent.mode.in_(_REAL_MODES)),  # campaign may be NULL
+    )
+    return any(session.scalar(stmt.limit(1)) is not None for stmt in checks)
+
+
+def _bound_identity(session: Session) -> set[str]:
+    """The identity this install is bound to: the latest mailbox row, or else the
+    senders recorded in real-mode history (rows removed by a future disconnect or a
+    legacy database must not make a different account look like a first connection)."""
+    latest = session.scalar(select(MailboxAccount).order_by(MailboxAccount.id.desc()).limit(1))
+    if latest is not None:
+        return {latest.email}
+    senders = set(
+        session.scalars(select(SendAttempt.sender).where(SendAttempt.mode.in_(_REAL_MODES)))
+    )
+    senders |= set(
+        session.scalars(
+            select(ApprovalSnapshot.sender).where(ApprovalSnapshot.mode.in_(_REAL_MODES))
+        )
+    )
+    return {sender.strip().lower() for sender in senders if sender}
+
+
+def check_mailbox_connection(session: Session, email: str) -> ConnectionKind:
+    """Read-only: classify a connection or raise ``MailboxIdentityRefused`` (M02).
+
+    v1 policy: the same identity may always reconnect; a different identity is allowed
+    only as a setup-only switch, before any real-mode history exists. Identity is the
+    canonical primary address (no stable account id without extra scopes, spec §10).
+    """
+    try:
+        normalized = normalize_address(email)
+    except RecipientError as exc:
+        raise MailboxIdentityRefused(["mailbox_address_invalid"]) from exc
+    bound = _bound_identity(session)
+    if not bound:
+        return ConnectionKind.FIRST
+    if bound == {normalized}:
+        return ConnectionKind.SAME_IDENTITY
+    if real_mode_history_exists(session):
+        raise MailboxIdentityRefused(["mailbox_identity_switch_after_real_history"])
+    return ConnectionKind.SETUP_SWITCH
+
+
 def connect_mailbox(
     session: Session, email: str, scopes: frozenset[str], *, actor: Actor, now: datetime
 ) -> MailboxAccount:
-    """Record the verified connected account. A different account invalidates its approvals.
+    """Record the verified connected account (spec §15; M02).
 
-    A verified (re)connection with the required scopes clears the global Gmail auth
-    block (spec §15); a connection missing a scope keeps real dispatch halted.
+    The identity check runs first, inside this (BEGIN IMMEDIATE) transaction and
+    before any write, so a refused switch changes nothing: not the auth block, the
+    account rows, approvals, the sync cursor or readiness. The check must stay here
+    even if a caller checked earlier. A verified (re)connection of the bound identity,
+    or a permitted setup-only switch, with the required scopes clears the global Gmail
+    auth block; a connection missing a scope keeps real dispatch halted.
+
+    Connect flow for the real adapter (P0.3): read the profile with the new token in
+    memory, outside any transaction; call this; only after it commits, store the new
+    token. A refusal discards the new token and leaves stored credentials untouched.
     """
-    normalized = email.strip().lower()
+    kind = check_mailbox_connection(session, email)
+    normalized = normalize_address(email)
     if scopes >= REQUIRED_SCOPES:
         runtime.set_auth_block(session, False, None, now=now)
     else:
         runtime.set_auth_block(session, True, "required_scopes_missing", now=now)
-    current = _active_mailbox(session)
-    if current is not None and current.email == normalized:
-        current.scopes_json = json.dumps(sorted(scopes))
-        current.verified_at = now
-        return current
-    if current is not None:
-        current.active = False
-        current.version += 1
-        invalidate_dependents(
+    if kind is ConnectionKind.SAME_IDENTITY:
+        latest = session.scalar(
+            select(MailboxAccount)
+            .where(MailboxAccount.email == normalized)
+            .order_by(MailboxAccount.id.desc())
+            .limit(1)
+        )
+        if latest is not None:
+            latest.scopes_json = json.dumps(sorted(scopes))
+            latest.verified_at = now
+            latest.active = True
+            return latest
+    if kind is ConnectionKind.SETUP_SWITCH:
+        for old in session.scalars(select(MailboxAccount).where(MailboxAccount.active.is_(True))):
+            old.active = False
+            old.version += 1
+            # Defence in depth: no real approval can exist here (it would be history).
+            invalidate_dependents(
+                session,
+                DependencyKind.MAILBOX_ACCOUNT,
+                old.id,
+                actor=actor,
+                now=now,
+                reason="connected Gmail account changed",
+            )
+        sync_svc.reset_coverage(session, sync_svc.mailbox_key_for(Mode.LIVE), now)
+        runtime.set_live_readiness(session, False, actor=actor, now=now)
+        audit(
             session,
-            DependencyKind.MAILBOX_ACCOUNT,
-            current.id,
+            at=now,
             actor=actor,
-            now=now,
-            reason="connected Gmail account changed",
+            entity_type="mailbox_account",
+            entity_id=0,
+            action="mailbox_switched_setup_only",
         )
     account = MailboxAccount(
         email=normalized, scopes_json=json.dumps(sorted(scopes)), active=True, verified_at=now

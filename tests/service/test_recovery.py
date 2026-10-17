@@ -146,13 +146,12 @@ def test_timeout_after_acceptance_reconciles_immediately(live) -> None:
     assert len(live.gmail.send_calls) == 1
 
 
-def test_rewritten_message_id_correlates_by_x_marcelorian_id(live) -> None:
+def test_rewritten_message_id_not_found_stays_uncertain(live) -> None:
     _camp, mid = email1(live)
     live.gmail.rewrite_message_id = True
     live.gmail.send_script = ["server_error_after_accept"]
-    # rfc822msgid search cannot find a rewritten id: emulate Gmail returning it via the
-    # fallback correlation path by searching on the X header is not possible, so the fake
-    # returns no hit and the attempt must stay uncertain (never "not found -> retry").
+    # The rfc822msgid search cannot find a rewritten id and there is no fallback search,
+    # so the attempt must stay uncertain (never "not found -> retry").
     result = live.dispatch(mid)
     assert result.outcome is Outcome.UNCERTAIN
     assert live.gmail.sent_messages()  # it really was sent: retrying would duplicate it
@@ -165,7 +164,7 @@ def test_match_by_x_header_when_message_id_rewritten(live, monkeypatch) -> None:
     original = live.gmail.search_message_ids
 
     def search(query, *, include_spam_trash):
-        if query.startswith("rfc822msgid:"):  # adapter fallback found the sent copy
+        if query.startswith("rfc822msgid:"):  # emulate a search that finds the sent copy
             return type(original(query, include_spam_trash=include_spam_trash))(
                 ids=tuple(m.meta.gmail_message_id for m in live.gmail.sent_messages()),
                 complete=True,

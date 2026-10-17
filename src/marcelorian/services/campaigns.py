@@ -8,7 +8,8 @@ Policy, kept deliberately small and explicit:
 * ``conversation``, ``sequence_complete`` and ``closed`` are never overwritten by
   recovery, late results or pause bookkeeping. Open reasons on such campaigns
   remain as attention items but cannot restart a stopped sequence.
-* Leaving the holding states releases the pending slot. The new-contact ledger
+* Leaving the holding states releases the pending slot. Entering ``conversation``
+  or ``closed`` also ends an optional post-Email-4 hold. The new-contact ledger
   and any unresolved attempt (with its budget hold) are untouched (B13).
 """
 
@@ -66,6 +67,10 @@ def set_campaign_state(
         release_projected_contact_if_unneeded(
             session, campaign, now, reason or f"left {current.value}"
         )
+    elif target in (CampaignState.CONVERSATION, CampaignState.CLOSED):
+        # A genuine reply or a closed outcome ends an optional post-Email-4 hold at once
+        # (spec §3, §11; M04). The consumed new-contact ledger is never touched.
+        reservations.release_pending_slot(session, campaign, now, f"hold_ended:{target.value}")
     audit(
         session,
         at=now,

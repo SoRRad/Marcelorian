@@ -151,7 +151,12 @@ def resume_dispatch(session: Session, *, actor: Actor, now: datetime) -> Runtime
 
 
 def set_live_readiness(session: Session, complete: bool, *, actor: Actor, now: datetime) -> None:
-    """Recorded by the live readiness checklist (P5/P6 UI); P0 stores the flag only."""
+    """Recorded by the live readiness checklist (P5/P6 UI); P0 stores the flag only.
+
+    Live mode never stays active without readiness: withdrawing it while live is
+    active (e.g. a setup-only mailbox switch, M02) moves to sandbox with dispatch
+    paused, exactly as an explicit mode switch would.
+    """
     row = _row(session, now)
     row.live_readiness_complete = complete
     row.updated_at = now
@@ -164,6 +169,22 @@ def set_live_readiness(session: Session, complete: bool, *, actor: Actor, now: d
         action="live_readiness",
         to_state=str(complete),
     )
+    if not complete and row.active_mode == Mode.LIVE.value:
+        row.active_mode = Mode.SANDBOX.value
+        row.dispatch_paused = True
+        row.pause_reason = RuntimePauseReason.MODE_SWITCH.value
+        _log(session, row, now, f"mode_switch:{Mode.LIVE.value}->{Mode.SANDBOX.value}")
+        audit(
+            session,
+            at=now,
+            actor=actor,
+            entity_type="runtime",
+            entity_id=1,
+            action="mode_switched",
+            from_state=Mode.LIVE.value,
+            to_state=Mode.SANDBOX.value,
+            reason="live readiness withdrawn; dispatch paused until explicitly resumed",
+        )
 
 
 def set_auth_block(session: Session, blocked: bool, reason: str | None, *, now: datetime) -> None:

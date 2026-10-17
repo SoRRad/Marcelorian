@@ -5,7 +5,7 @@ assignment, so merged groups never double-count):
 
 * pending occupancy = active ``pending_slot`` reservations (a campaign holds one
   while in ``outreach_pending``/``paused_review``; the optional 14-day hold keeps
-  it counted until ``hold_until``);
+  it counted until ``hold_until``, or until a genuine reply or closure ends it);
 * new contacts in the rolling 30 days = ``new_contact`` reservations consumed at
   an Email 1 ``sent_at`` with ``sent_at > now - 30d`` (no upper bound: a
   slightly future-dated established time still counts) plus active
@@ -294,6 +294,10 @@ def _end(
 ) -> None:
     row.status = status.value
     if status is ReservationStatus.RELEASED:
+        if row.hold_until is not None and row.hold_until <= now:
+            # The optional hold already stopped counting on its own: record it as
+            # lapsed then, not as ended by the event (reply, closure) that ends the row.
+            now, reason = row.hold_until, "hold_lapsed"
         row.released_at, row.release_reason = now, reason
 
 

@@ -103,7 +103,9 @@ class AttemptStatus(StrEnum):
     SENT = "sent"
     FAILED_DEFINITE = "failed_definite"
     UNCERTAIN = "uncertain"
-    NOT_SUBMITTED = "not_submitted"  # uncertain attempt resolved by recorded evidence
+    #: Definitely never submitted: an uncertain attempt resolved by recorded evidence, or a
+    #: claimed attempt the gateway never handed to the transport (resolution "not_invoked").
+    NOT_SUBMITTED = "not_submitted"
 
 
 UNRESOLVED_ATTEMPT_STATES: frozenset[AttemptStatus] = frozenset(

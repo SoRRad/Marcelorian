@@ -35,17 +35,18 @@ for anything other than pass.
 | 3 | T1 self-send delivered (connectivity only) | | |
 | 4 | T2 Email 1 S→R2 delivered; snapshot showed override, actual recipient and fake PI | | |
 | 5 | T2 Email 2 in the same conversation (`threadId` matched) | | |
-| 6 | `In-Reply-To` and `References` equal the actual RFC Message-ID of Email 1 | | |
+| 6 | `In-Reply-To` and `References` equal the provider-observed (Gmail-stored) Message-ID of Email 1, read with metadata | | |
 | 7 | Subject exactly `Re: Research Position Application – Ophthalmology` (en dash, single `Re:`) at both S and R2 | | |
-| 8 | Our `Message-ID` preserved by Gmail (if not: pattern Gmail used) | | |
+| 8 | Our `Message-ID` preserved by Gmail (if not: pattern Gmail used); app audit `message_id_preserved` true/false | | |
 | 9 | `X-Marcelorian-Id` preserved | | |
-| 10 | If 8 failed: correlation via `X-Marcelorian-Id` / returned IDs worked | | |
+| 10 | If 8 failed: the app recorded Gmail's Message-ID and Email 2 used it; correlation via `X-Marcelorian-Id` / returned IDs worked | | |
+| 10a | Every post-send metadata read succeeded; if any failed, the follow-up stayed held and nothing was resent | | |
 | 11 | R2's reply observed through history sync, metadata only | | |
 | 12 | History cursor saved only after all pages were processed | | |
 | 13 | Follow-up after the reply was **not** sent | | |
 | 14 | Every read request used `format=metadata` with the header allowlist; no `full`/`raw`/snippet/body/attachment request | | |
 | 15 | No bodies, tokens or full addresses in app logs (spot-check `marcelorian.log`) | | |
-| 16 | *(Optional, L2)* Revoked token → dispatch halted with "Gmail needs reconnecting" → reconnect → resumed | | |
+| 16 | *(Optional, L2)* Revoked token → dispatch halted with "Gmail needs reconnecting" → reconnect with the same account → resumed; a different account was refused | | |
 | 17 | L3: token still valid after 7+ days | pending | Observe on or after: ____ (do not mark passed before then) |
 
 ## 3. Deviations and anomalies
@@ -57,7 +58,8 @@ addresses.
 ## 4. Not tested in this run
 
 List what was skipped and why. For example: tray, toasts, sleep/resume and
-auto-start are P3/P5 and out of scope; L3 is pending.
+auto-start are P3/P5 and out of scope; L3 is pending. Message-ID preservation
+was only simulated (fake transport) before this run.
 
 ## 5. Cleanup
 

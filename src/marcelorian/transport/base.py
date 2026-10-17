@@ -5,6 +5,18 @@ Implementations:
 * The Gmail adapter (P0.3, after authorization). It must make exactly one
   ``messages.send`` call per ``send()`` with automatic retries disabled, and
   must build every read request with ``marcelorian.domain.gmail_params``.
+
+Contract points the gateway relies on (DECISIONS notes 28, 31, 32):
+
+* ``send()`` performs no network I/O before its single request (credentials are
+  refreshed during the preflight ``account()`` call), so the gateway's final
+  clock check really is immediately before the request. ``SendResult`` carries
+  ids only; the app never assumes the submitted Message-ID survived.
+* ``get_message_metadata()`` returns the headers the provider actually stored
+  (lower-cased ``message-id``, ``x-marcelorian-id``, ``to``), using
+  ``format=metadata``, and raises on any failure.
+* ``account().email`` is the provider-reported primary address; its canonical
+  form is the mailbox identity key.
 * Test doubles under ``tests/fakes``.
 """
 

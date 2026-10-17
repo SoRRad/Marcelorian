@@ -116,7 +116,7 @@ Side states:
 - `failed_definite`: Gmail definitively rejected the message before acceptance. It may be re-approved.
 - `uncertain`: the outcome is unknown. Never auto-retried. A Cancel button never clears it (B5).
 - `cancelled`
-- `needs_reapproval`: snapshot invalidated (a dependency or the message's own content changed, §9.1) or assigned window missed (§9.4).
+- `needs_reapproval`: snapshot invalidated (a dependency or the message's own content changed, §9.1), assigned window missed (§9.4), or a claimed submission that the gateway never handed to Gmail (§9.6 step 3).
 
 Cancelling a claimed (`sending`) message is not a recall: the UI says submission may already have started, future steps stop, and the current attempt is reconciled (B5, §9.6).
 
@@ -333,7 +333,7 @@ Approval binds a snapshot containing: campaign ID, step, mode, connected sender 
 
 ### 9.4 Window, pacing, and recovery
 - A message never **starts** sending at or after the window end in PI local time (11:00 by default, never later than 16:00; §1, W1). If preflight crosses the window end, nothing is submitted (B10).
-- Within a window, sends are spaced 2–6 minutes apart (random) and limited by caps. Deferral for caps or pacing during normal operation rolls to the next valid window automatically, with no catch-up bursts.
+- Within a window, sends are spaced 2–6 minutes apart (random) and limited by caps. Spacing is measured from the latest instant a claimed submission may start, so it holds between actual Gmail calls, not only between claims. Deferral for caps or pacing during normal operation rolls to the next valid window automatically, with no catch-up bursts.
 - **Pacing ledger (B8):** spacing is serialized and persisted across actual Gmail submissions in both `live` and `transport_test`, regardless of the PI's time zone. Sandbox uses its own simulated clock and pacing. A restart or mode switch never resets real-send spacing. A transport-test override never bypasses pacing.
 - **Missed-window rule (B7):** re-approval (`needs_reapproval`, campaign `paused_review(missed_window)`) is required only when an assigned eligible window passes with **no functioning dispatch/safety evaluation** of the message during the portion in which it could have been considered, because the worker or required connectivity/sync was unavailable.
   - Every window that has passed unsent is judged in turn: the assigned window, then each next eligible window up to now. The message rolls on only while each passed window was considered; the first one that passed unattended requires re-approval.
@@ -388,12 +388,12 @@ Slow discovery or AI work never delays Gmail safety checks or dispatch. A heartb
    - Reserve the 24-hour budget.
    - Insert a `send_attempt` (status `in_flight`) holding the attempt ID, app Message-ID, `X-Marcelorian-Id`, mode, sender, recipient, and snapshot hash.
    - A unique partial index allows only one unresolved attempt per message.
-   - Commit. **This commit is the documented point beyond which recall is not promised.** Cancellation and claim are serialized: a cancellation committed before it prevents submission; one committed after it is recorded as a stop request, and the attempt is reconciled (B5, B10).
-3. **Submit:** build MIME (plain text) from the snapshot bytes only and call `messages.send` once, with no retries. The MIME is built before the claim, so only an in-memory hand-off separates the claim commit from the call.
+   - Commit. **This commit is the documented point beyond which recall is not promised.** Cancellation and claim are serialized: a cancellation committed before it prevents submission; one committed after it is recorded as a stop request, and the attempt is reconciled, or, if Gmail was never invoked (step 3), recorded as not submitted, after which the cancel takes effect (B5, B10).
+3. **Submit:** build MIME (plain text) from the snapshot bytes only and call `messages.send` once, with no retries. The MIME is built before the claim, so only an in-memory hand-off separates the claim commit from the call. The claim reads the clock only after taking the database write lock. Immediately before the call the gateway re-reads the clock in memory: if it is earlier than the claim, at or after the window end, or at or more than the hand-off limit (5 s) after the claim (for example after a laptop sleep), Gmail is never invoked. The attempt is then recorded `not_submitted` by the gateway itself (a definite non-submission, not an ambiguous outcome), its budget hold is released, no `send_uncertain` review opens, and the message needs re-approval; it is never retried. A crash before that record leaves the attempt in flight for reconciliation (step 7). The P0.3 adapter's `send` does no network I/O before its single request (credentials are refreshed during preflight).
    - **Identifiers (B12):** the RFC Message-ID is a unique opaque value at the verified sender's email domain, never the laptop hostname. A distinct value is used for each separately authorized attempt, kept throughout that attempt's reconciliation, and never regenerated because a search returned nothing.
    - `X-Marcelorian-Id` carries an opaque value with no applicant name, file path, or other personal data. It is a visible correlation header, not a secret or credential.
    - Message-ID is useful evidence, not a provider idempotency guarantee.
-4. **Definite success:** in one transaction, mark the attempt and message `sent`, store the Gmail message and thread IDs, transition the campaign, record budget usage, and compute the next `due_at`. **Commit before** any export or Sheet work; export failure never causes a resend. A success that arrives after the campaign moved to `conversation` or `closed` is recorded without overwriting that newer state (B13).
+4. **Definite success:** in one transaction, mark the attempt and message `sent`, store the Gmail message and thread IDs, transition the campaign, record budget usage, and compute the next `due_at`. After that commit the sent message's metadata is read once, with no transaction held, to record the provider-observed Message-ID and thread; until they verify (SENT label, Gmail ID, campaign thread, our X-Marcelorian-Id or Message-ID, recipient, a well-formed Message-ID), the next step cannot be approved or dispatched. A failed read never causes a resend; it is retried by startup recovery. **Commit before** any export or Sheet work; export failure never causes a resend. A success that arrives after the campaign moved to `conversation` or `closed` is recorded without overwriting that newer state (B13).
 5. **Definite rejection** (Gmail error proving non-acceptance): mark `failed_definite`, release the budget and the attempt, and show the error. Re-approval is required to try again.
 6. **Ambiguous** (timeout, connection loss, 5xx, crash): reconcile.
    - Search Sent by `rfc822msgid:` and corroborate by recipient, time, and thread.
@@ -401,7 +401,7 @@ Slow discovery or AI work never delays Gmail safety checks or dispatch. A heartb
    - Not found or search failed → `uncertain`, with the reservation and budget **held** and the campaign moved to `paused_review(send_uncertain)`. **"Not found" alone never makes the message eligible for retry.**
    - The applicant resolves it explicitly and auditably as: confirmed sent / evidence of definite non-submission (re-approval required) / still unresolved.
    - **Resolution rules (B13):**
-     - The budget hold is released only when definite non-submission is supported and recorded, never because a Sent search is empty.
+     - The budget hold is released only when definite non-submission is supported and recorded (by the applicant's evidence, or by the gateway when it never invoked Gmail, step 3), never because a Sent search is empty.
      - Resolving the attempt never forces the campaign to `outreach_pending` and never restarts a stopped sequence. A reply, do-not-contact instruction, closure, or other unresolved review reason that arrived meanwhile stays in effect.
      - Pending capacity is retained only when the current campaign still requires it.
 7. **Crash after Gmail accepted but before the commit:** on startup, an `in_flight` attempt goes through reconciliation (step 6), never a fresh send.
@@ -409,7 +409,7 @@ Slow discovery or AI work never delays Gmail safety checks or dispatch. A heartb
 Verify in P0.3 that Gmail preserves the custom Message-ID and `X-Marcelorian-Id` header, using metadata only (never bodies or raw data). If it does not, correlate using the returned IDs and metadata and document the behavior.
 
 ### 9.7 Threading
-Follow-ups use the original campaign `threadId`, set `In-Reply-To` and `References` from the actual RFC Message-IDs, and use one subject chain (`Re: Research Position Application – Ophthalmology`). Earlier messages are not quoted automatically (B15). Never merge distinct PIs because they share a subject. Test the en-dash subject and `Re:` normalization on real accounts in P0.3.
+Follow-ups use the original campaign `threadId`, set `In-Reply-To` and `References` from the actual (provider-observed, verified) RFC Message-IDs, and use one subject chain (`Re: Research Position Application – Ophthalmology`). Earlier messages are not quoted automatically (B15). Never merge distinct PIs because they share a subject. Test the en-dash subject and `Re:` normalization on real accounts in P0.3.
 
 ---
 
@@ -456,7 +456,7 @@ Positive / Requests info / No opening / Referral / Contact later (date) / Do not
 - **Do not contact** adds the PI to the do-not-contact list. A simulated reply tag in sandbox (or a transport_test tag on a synthetic PI) affects only that mode's scope and never edits the live list (C7).
 
 ### Known limit
-The final preflight reduces but cannot eliminate the race with a reply arriving just before submission. The atomic claim (§9.6 step 2) is the last check; a genuinely new reply arriving after it cannot stop that submission. The UI and docs state this.
+The final preflight reduces but cannot eliminate the race with a reply arriving just before submission. The atomic claim (§9.6 step 2) is the last check; a genuinely new reply arriving after it cannot stop that submission. That window is bounded by the hand-off limit (§9.6 step 3). The UI and docs state this.
 
 ---
 
@@ -488,7 +488,7 @@ All counts are per mode, except the real-submission budget and pacing ledger, wh
   - Pacing stays positive (default 2–6 minutes, minimum ≤ maximum).
   - No setting can disable approval, recipient validation, uncertainty handling, or reply checking. Debug settings are impossible in live mode.
 - **Lab conversation warning:** before reserving a slot for a PI in a lab group with a `conversation`, show its status; the applicant must confirm.
-- **Optional stricter setting (off by default):** hold the slot 14 days after Email 4.
+- **Optional stricter setting (off by default):** hold the slot 14 days after Email 4's established `sent_at`. A genuine reply or any `closed` outcome during the hold releases it at once; otherwise it lapses exactly 14 days later. Consumed 30-day contact history is never affected.
 - Caps apply to this applicant's local records only.
 
 ---
@@ -554,7 +554,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 
 ## 15. Error handling
 
-- **Gmail auth failure, scope mismatch, or account mismatch:** halt all dispatch. Show a "Gmail needs reconnecting" banner and toast with a reconnect button. Production publishing status avoids the Testing-mode 7-day token expiry, but tokens can still be revoked or expire, so this state is permanent and expected.
+- **Gmail auth failure, scope mismatch, or account mismatch:** halt all dispatch. Show a "Gmail needs reconnecting" banner and toast with a reconnect button. Reconnect must use the bound Gmail identity (its canonical primary address): once any live or transport_test campaign, attempt or mailbox record exists, a different account is refused before anything changes and the banner stays. Before that, switching accounts is a setup-only action that inherits no history cursor, coverage or readiness; if live mode was active it returns to sandbox with dispatch paused. Production publishing status avoids the Testing-mode 7-day token expiry, but tokens can still be revoked or expire, so this state is permanent and expected.
 - **Sync failure:** dispatch stays blocked; the banner shows `last_gmail_coverage_at`.
 - **Public API errors:** backoff and retry (read-only calls only). Keep partial results.
 - **LLM errors or invalid output:** no draft is created; offer a retry. Never fall back to unvalidated text.
@@ -658,7 +658,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 8. Cancelling an unsent Email 1 returns the campaign to `candidate`, keeps the message and audit history, and releases its reservations. That return is refused while an attempt is in flight or uncertain: a Cancel then is recorded as a stop request and completes the B3 path only once non-submission is definite (test 54). Revoking a follow-up does not release the slot (B3, B5).
 
 **Approval and snapshot**
-9. Changing the mode, sender, recipient, body, or the attachment of that specific message invalidates the approval. Uploading a new CV version does not (B19). Changing a fact or profile field the message uses invalidates it; an unrelated edit does not (B18).
+9. Changing the mode, sender, recipient, body, or the attachment of that specific message invalidates the approval (the sender account cannot change once real-mode history exists, test 77; a changed sender record is still caught at the claim). Uploading a new CV version does not (B19). Changing a fact or profile field the message uses invalidates it; an unrelated edit does not (B18).
 10. The latest CV is never substituted into an approved message.
 11. A sandbox or transport_test message never becomes live; switching modes pauses the worker and never changes a stored message's mode (B9).
 
@@ -741,6 +741,14 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 71. A re-discovered, unmerged record that shares any exact known address or ORCID/OpenAlex identifier with a contacted or do-not-contact record is blocked, at approval and at dispatch; in live and sandbox, a prior-contact hit that is the app's own message for another campaign blocks as duplicate outreach and is never acknowledgeable (C7, B14).
 72. Local cap or pacing deferrals while Gmail coverage is stale are not functioning evaluations; an unresolved own attempt is a functioning safety hold; a snapshot failing its hash sends only that message to review (B7).
 73. Gmail read requests that are not exactly metadata-only are refused; log redaction covers the full formatted output, including tracebacks; malformed or foreign cookies from other 127.0.0.1 pages never lock the applicant out of the UI (§2, §10).
+
+**Added by the owner's P0 repair review (automated, P0)**
+74. A suspend, stall or clock step between the claim and the Gmail call never submits outside the permitted window, after the hand-off limit, or with a clock earlier than the claim; such an attempt is recorded not submitted (budget released, no uncertainty review, re-approval required, never retried), while a crash before that record stays ambiguous; actual Gmail calls stay at least the pacing minimum apart (B8, B10, M01).
+75. Overlapping prior-contact reviews listing the same exact Gmail IDs are each acknowledgeable; existing acknowledgments are reused, new IDs recorded and audited, and nothing is acknowledged by sender (B14, M03).
+76. A genuine reply or a closed outcome during the optional post-Email-4 hold releases the pending slot at once; ordinary expiry frees it at exactly 14 days; consumed 30-day history is unchanged (§11, M04).
+77. A different Gmail account is refused, with nothing changed, once real-mode history exists; the same identity can always reconnect; a setup-only switch inherits no cursor, coverage or readiness and leaves live mode (§15, M02).
+78. Withdrawing a fact's confirmation without changing its text invalidates only unsent approvals that cite it; no-op and unrelated edits change nothing; the claim refuses any unconfirmed fact (§4, B18, M05).
+79. Follow-ups thread on the provider-observed Message-ID; a rewritten ID is recorded; a failed metadata read after a successful send never resends and holds the next step until verified (fake transport only; live preservation is a P0.3 item) (§9.6, §9.7, B12, M06).
 
 **LIVE (Windows 11, transport_test, allowlisted addresses only, explicit authorization)**
 - L1: Self-send; a two-address thread with a reply from the second address; verify threading/subject.
