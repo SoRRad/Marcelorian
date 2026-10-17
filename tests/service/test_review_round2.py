@@ -144,13 +144,13 @@ def test_shared_known_address_does_not_permit_a_second_sequence(live) -> None:
 
 def test_shared_orcid_unmerged_record_gets_no_second_email1(live) -> None:
     rec_r = live.pi(live.institution(), email="moved.pi@synthetic-old.test")
-    set_orcid(live, rec_r, "0000-0002-0000-0001")
+    set_orcid(live, rec_r, "0000-0002-0000-0006")
     first = live.campaign(rec_r, Mode.LIVE)
     assert live.dispatch(live.draft_and_approve(first)).outcome is Outcome.SENT
     close(live, first)
     live.clock.advance(timedelta(minutes=10))
     rec_p = live.pi(live.institution(), email="moved.pi@synthetic-new.test")
-    set_orcid(live, rec_p, "0000-0002-0000-0001")
+    set_orcid(live, rec_p, "0000-0002-0000-0006")
     with pytest.raises(ApprovalError) as info:
         live.approve(live.draft(live.campaign(rec_p, Mode.LIVE)))
     assert "duplicate_outreach" in info.value.reasons
@@ -165,8 +165,8 @@ def test_identity_linked_after_approval_is_blocked_at_dispatch(live) -> None:
     live.clock.advance(timedelta(minutes=10))
     rec_p = live.pi(live.institution(), email="dr.late@synthetic-new.test")
     mid = live.draft_and_approve(live.campaign(rec_p, Mode.LIVE))
-    set_orcid(live, rec_r, "0000-0002-0000-0042")  # enrichment links them after approval
-    set_orcid(live, rec_p, "0000-0002-0000-0042")
+    set_orcid(live, rec_r, "0000-0002-0000-0049")  # enrichment links them after approval
+    set_orcid(live, rec_p, "0000-0002-0000-0049")
     assert live.dispatch(mid).reason == "duplicate_outreach"
     assert len(live.gmail.send_calls) == 1
 
@@ -207,12 +207,12 @@ def test_prior_contact_hit_on_another_campaigns_app_message_is_not_acknowledgeab
 def test_orcid_entry_covers_the_known_address_of_the_record_with_that_orcid(world) -> None:
     inst = world.institution()
     listed = world.pi(inst, email="dr.listed@synthetic-univ.test")
-    set_orcid(world, listed, "0000-0003-0000-0042")
+    set_orcid(world, listed, "0000-0003-0000-0046")
     with transaction(world.factory) as s:
         dnc.add_entry(
             s,
             scope_mode=Mode.LIVE,
-            orcid="0000-0003-0000-0042",
+            orcid="0000-0003-0000-0046",
             actor=Actor.APPLICANT,
             now=world.clock.now(),
         )
@@ -224,7 +224,7 @@ def test_orcid_entry_covers_the_known_address_of_the_record_with_that_orcid(worl
 
 def test_address_entry_covers_the_orcid_of_the_record_with_that_address(world) -> None:
     listed = world.pi(world.institution(), email="dr.moved@synthetic-old.test")
-    set_orcid(world, listed, "0000-0003-0000-0077")
+    set_orcid(world, listed, "0000-0003-0000-0070")
     with transaction(world.factory) as s:
         dnc.add_entry(
             s,
@@ -234,7 +234,7 @@ def test_address_entry_covers_the_orcid_of_the_record_with_that_address(world) -
             now=world.clock.now(),
         )
     rediscovered = world.pi(world.institution(), email="dr.moved@synthetic-new.test")
-    set_orcid(world, rediscovered, "0000-0003-0000-0077")
+    set_orcid(world, rediscovered, "0000-0003-0000-0070")
     with pytest.raises(ApprovalError) as info:
         world.approve(world.draft(world.campaign(rediscovered)))
     assert "do_not_contact" in info.value.reasons
@@ -246,8 +246,8 @@ def test_identity_closure_follows_chains_but_never_name_and_institution(world) -
     b = world.pi(inst, email="chain.b@synthetic-univ.test")
     add_known_address(world, b, "chain.a@synthetic-univ.test")  # A ~ B by address
     c = world.pi(world.institution(), email="chain.c@synthetic-other.test")
-    set_orcid(world, b, "0000-0003-0000-0101")
-    set_orcid(world, c, "0000-0003-0000-0101")  # B ~ C by ORCID
+    set_orcid(world, b, "0000-0003-0000-010X")
+    set_orcid(world, c, "0000-0003-0000-010X")  # B ~ C by ORCID
     namesake = world.pi(inst, email="namesake@synthetic-univ.test")
     with transaction(world.factory) as s:
         s.get(Pi, namesake).full_name = s.get(Pi, a).full_name
@@ -367,3 +367,72 @@ def test_ordinary_blackouts_are_accepted() -> None:
     validate(AppSettings(blackout_federal_holidays=True, blackout_year_end=True))
     validate(AppSettings(window_weekdays=(1,), blackout_federal_holidays=True))
     assert date(2026, 12, 22).weekday() == 1  # sanity for the fixtures above
+
+
+# -- identifier forms (review round 3; spec §3, C7, acceptance 71) ------------------------------
+
+
+def set_openalex(world, pi_id, openalex_id):
+    with transaction(world.factory) as s:
+        s.get(Pi, pi_id).openalex_id = openalex_id
+
+
+def test_orcid_written_as_url_and_bare_is_one_identity_for_dnc(world) -> None:
+    listed = world.pi(world.institution(), email="dr.url@synthetic-univ.test")
+    set_orcid(world, listed, "0000-0002-1825-0097")
+    with transaction(world.factory) as s:
+        entry = dnc.add_entry(
+            s,
+            scope_mode=Mode.LIVE,
+            orcid="https://orcid.org/0000-0002-1825-0097",
+            actor=Actor.APPLICANT,
+            now=world.clock.now(),
+        )
+        assert entry.orcid == "0000-0002-1825-0097"
+    with pytest.raises(ApprovalError) as info:
+        world.approve(world.draft(world.campaign(listed)))
+    assert "do_not_contact" in info.value.reasons
+
+
+def test_rediscovered_record_with_url_form_orcid_gets_no_second_email1(live) -> None:
+    rec_r = live.pi(live.institution(), email="url.form@synthetic-old.test")
+    set_orcid(live, rec_r, "0000-0002-1825-0097")
+    first = live.campaign(rec_r, Mode.LIVE)
+    assert live.dispatch(live.draft_and_approve(first)).outcome is Outcome.SENT
+    close(live, first)
+    live.clock.advance(timedelta(minutes=10))
+    rec_p = live.pi(live.institution(), email="url.form@synthetic-new.test")
+    set_orcid(live, rec_p, "https://orcid.org/0000-0002-1825-0097")
+    with pytest.raises(ApprovalError) as info:
+        live.approve(live.draft(live.campaign(rec_p, Mode.LIVE)))
+    assert "duplicate_outreach" in info.value.reasons
+    assert len(live.gmail.send_calls) == 1
+
+
+def test_openalex_author_id_links_records_for_dnc_and_duplicates(live) -> None:
+    rec_r = live.pi(live.institution(), email="oa.person@synthetic-old.test")
+    set_openalex(live, rec_r, "A5023888391")
+    rec_p = live.pi(live.institution(), email="oa.person@synthetic-new.test")
+    set_openalex(live, rec_p, "https://openalex.org/A5023888391")
+    with transaction(live.factory) as s:
+        assert {rec_r, rec_p} <= dnc.pi_identity(s, rec_r).pi_ids
+        dnc.add_entry(
+            s,
+            scope_mode=Mode.LIVE,
+            openalex_id="https://openalex.org/A5023888391",
+            actor=Actor.APPLICANT,
+            now=live.clock.now(),
+        )
+    for record in (rec_r, rec_p):
+        with transaction(live.factory) as s:
+            assert dnc.matches(s, record, Mode.LIVE)
+
+
+def test_malformed_identifiers_are_refused_not_stored(world) -> None:
+    from marcelorian.domain.scholarly_ids import IdentifierError
+
+    pi = world.pi(world.institution())
+    with pytest.raises(IdentifierError):
+        set_orcid(world, pi, "0000-0002-1825-0098")  # wrong check character
+    with pytest.raises(IdentifierError):
+        set_openalex(world, pi, "W5023888391")  # a work, not an author

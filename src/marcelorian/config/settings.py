@@ -205,18 +205,35 @@ def less_conservative_keys(new: AppSettings, old: AppSettings) -> list[str]:
         value = getattr(new, key)
         if value < getattr(DEFAULTS, key) and value < getattr(old, key):
             keys.append(key)
-    new_policy, default_policy, old_policy = (
-        new.window_policy(),
-        DEFAULTS.window_policy(),
-        old.window_policy(),
-    )
-    if not new_policy.weekdays <= default_policy.weekdays | old_policy.weekdays:
-        keys.append("window_weekdays")
-    if new_policy.start < min(default_policy.start, old_policy.start):
-        keys.append("window_start")
-    if new_policy.end > max(default_policy.end, old_policy.end):
-        keys.append("window_end")
+    new_policy, old_policy = new.window_policy(), old.window_policy()
+    if _window_widened(new_policy, DEFAULTS.window_policy(), old_policy):
+        if new_policy.weekdays != old_policy.weekdays:
+            keys.append("window_weekdays")
+        if new_policy.start != old_policy.start:
+            keys.append("window_start")
+        if new_policy.end != old_policy.end:
+            keys.append("window_end")
     return keys
+
+
+def _window_widened(new: WindowPolicy, default: WindowPolicy, old: WindowPolicy) -> bool:
+    """True if any (weekday, time) the new window allows is allowed by neither the
+    default nor the old window.
+
+    Windows are compared as sets of permitted slots, not per key: a start and an end
+    that each stay within the bounding range of the two windows can still open hours
+    that neither allowed (old 13:00-16:00 -> new 08:00-16:00 opens 11:00-13:00). The
+    windows are half-open, so touching intervals cover each other's boundary.
+    """
+    for day in new.weekdays:
+        cursor = new.start
+        for start, end in sorted((p.start, p.end) for p in (default, old) if day in p.weekdays):
+            if start > cursor:
+                break
+            cursor = max(cursor, end)
+        if cursor < new.end:
+            return True
+    return False
 
 
 def load_settings(session: Session) -> AppSettings:

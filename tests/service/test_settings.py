@@ -169,3 +169,52 @@ def test_no_setting_can_disable_safety_controls() -> None:
     names = set(DEFAULTS.__dataclass_fields__)
     forbidden = {"approval", "recipient", "uncertain", "reply", "debug", "override", "always_open"}
     assert not {n for n in names if any(f in n for f in forbidden)}
+
+
+@pytest.mark.parametrize(
+    ("first", "then", "keys"),
+    [
+        # afternoon-only (confirmed), then back to an 08:00 start: 11:00-13:00 is new
+        (
+            {"window_start": "13:00", "window_end": "16:00"},
+            {"window_start": "08:00"},
+            ["window_start"],
+        ),
+        # Tuesday-only 08:00-16:00 (confirmed), then the default days: Wed/Thu afternoons
+        (
+            {"window_weekdays": [1], "window_end": "16:00"},
+            {"window_weekdays": [1, 2, 3]},
+            ["window_weekdays"],
+        ),
+    ],
+)
+def test_widening_into_slots_neither_window_allowed_needs_confirmation(
+    factory, clock, first, then, keys
+) -> None:
+    with transaction(factory) as s:
+        update_settings(
+            s, first, actor=Actor.APPLICANT, now=clock.now(), confirm_less_conservative=True
+        )
+    with transaction(factory) as s, pytest.raises(ConfirmationRequired) as info:
+        update_settings(s, then, actor=Actor.APPLICANT, now=clock.now())
+    assert info.value.keys == keys
+
+
+@pytest.mark.parametrize(
+    ("first", "then"),
+    [
+        # default 08:00-11:00 and old 11:00-16:00 together cover 08:00-16:00
+        ({"window_start": "11:00", "window_end": "16:00"}, {"window_start": "08:00"}),
+        # returning from a widened window to the default
+        ({"window_end": "16:00"}, {"window_end": "11:00"}),
+    ],
+)
+def test_returning_within_default_and_old_windows_needs_no_confirmation(
+    factory, clock, first, then
+) -> None:
+    with transaction(factory) as s:
+        update_settings(
+            s, first, actor=Actor.APPLICANT, now=clock.now(), confirm_less_conservative=True
+        )
+    with transaction(factory) as s:
+        update_settings(s, then, actor=Actor.APPLICANT, now=clock.now())

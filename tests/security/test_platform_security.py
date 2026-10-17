@@ -219,3 +219,83 @@ def test_app_paths_shape() -> None:
     assert paths.data_dir.name == "Marcelorian"
     assert paths.exports_dir.parts[-2:] == ("Marcelorian", "exports")
     assert paths.db_path.parent == paths.data_dir
+
+
+# -- review round 3: linear redaction, encoded addresses, unprintable messages, uvicorn ---------
+
+
+#: Built inside the test: pytest puts parameter values into the test ID, and Windows
+#: caps the PYTEST_CURRENT_TEST environment variable at 32767 characters.
+_LONG_RUNS = {
+    "key-hyphen": lambda: "key-" * 5000,
+    "hyphen-words": lambda: (
+        "-".join(["retina", "glaucoma", "session", "token", "cookie", "code", "eye"]) * 700
+    ),
+    "dotted": lambda: "a." * 20000,
+    "dotted-hyphenated": lambda: "abc.def-" * 5000 + "x",
+    "hyphens-then-at": lambda: "x-" * 3000 + "@",
+}
+
+
+@pytest.mark.parametrize("name", sorted(_LONG_RUNS))
+def test_redaction_stays_linear_on_long_hyphenated_or_dotted_runs(name) -> None:
+    """A quadratic pattern took minutes on 4-20 KB of such text (a logging DoS)."""
+    import time
+
+    text = _LONG_RUNS[name]()
+    started = time.perf_counter()
+    redact(text)
+    assert time.perf_counter() - started < 0.5
+
+
+@pytest.mark.parametrize(
+    ("raw", "forbidden"),
+    [
+        ("q=from%3A%22applicant.synthetic%2Bt1%40gmail.com%22", "applicant.synthetic"),
+        ("requesting ...?q=%28to%3A%22pat.example%2Bcv%40synthetic-univ.test%22", "pat.example"),
+        ("oauth2-token=SECRET9", "SECRET9"),
+        ("v1-session-id=SECRET9", "SECRET9"),
+        ("oauth2_token=SECRET9", "SECRET9"),
+    ],
+)
+def test_redaction_covers_encoded_plus_addresses_and_prefixed_keys(raw, forbidden) -> None:
+    assert forbidden not in redact(raw)
+
+
+def test_redaction_decodes_only_address_characters() -> None:
+    assert redact("100%25 done %0A next") == "100%25 done %0A next"
+
+
+class _Unprintable:
+    def __str__(self) -> str:
+        raise RuntimeError("cannot render")
+
+
+def test_unprintable_message_object_never_raises_into_the_caller(log_file: Path) -> None:
+    log = logging.getLogger("marcelorian.review")
+    log.warning(_Unprintable())
+    log.warning(_Unprintable(), "extra-arg")
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError:
+        log.exception(_Unprintable())
+    _flush()
+    assert "unprintable _Unprintable log message" in log_file.read_text("utf-8")
+
+
+def test_uvicorn_started_with_the_log_kwargs_keeps_redaction(log_file: Path) -> None:
+    import uvicorn
+
+    from marcelorian.logging_setup import UVICORN_LOG_KWARGS
+
+    async def app(scope, receive, send) -> None:  # pragma: no cover - never served
+        return None
+
+    uvicorn.Config(app, host="127.0.0.1", port=0, **UVICORN_LOG_KWARGS)
+    error_logger = logging.getLogger("uvicorn.error")
+    assert error_logger.propagate and not logging.getLogger("uvicorn").handlers
+    error_logger.error("Exception in ASGI application for %s", "pi@synthetic-univ.test")
+    _flush()
+    text = log_file.read_text("utf-8")
+    assert "Exception in ASGI application" in text and "pi@synthetic-univ.test" not in text
+    assert logging.getLogger("uvicorn.access").disabled

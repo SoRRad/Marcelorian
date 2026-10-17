@@ -150,7 +150,12 @@ narrows behavior in the conservative direction. None of them changes a decision.
 16. **Missed-window portion.** The considered portion starts at the latest of
     the window start, the approval time and the due time. It contains only
     instants that the *current* window policy permits, which honors blackouts
-    and narrowed hours added after approval. Deferrals for `outside_window`,
+    and narrowed hours added after approval. Every window that has passed is
+    judged in turn (the assigned one, then each next eligible window up to
+    now); a window considered by a functioning worker rolls the message on, and
+    the first one that passed unattended sends it to review. A later window on
+    the same day (a widened policy) is judged only from where the previous one
+    ended, so no evaluation counts twice. Deferrals for `outside_window`,
     `not_due`, `paused` and `mode_inactive` are never treated as consideration.
     A mailbox-level sync gap is checked before any cap or pacing deferral.
 17. **Reconnect clears the auth block.** A verified (re)connection with both
@@ -161,16 +166,20 @@ narrows behavior in the conservative direction. None of them changes a decision.
     `changed_during_preflight` and nothing about the message is altered.
 19. **Canonical addresses.** Every address (PI emails, allowlist, do-not-contact
     entries, snapshot recipients) is one strict, lower-cased RFC 5322 addr-spec:
-    a dot-atom local part without `=` or `?`, an ASCII host name, at most 254
-    characters. A pasted `mailto:` prefix is removed first; display names,
-    group syntax, quoted strings, comments, domain literals and non-ASCII are
-    rejected. `build_mime` re-parses the rendered `To`/`From` headers and
+    a dot-atom local part without `=`, `?`, `%` or `/`, an ASCII host name, at
+    most 254 characters. A pasted `mailto:` prefix is removed first; a
+    percent-encoded or `mailto://` remainder, display names, group syntax,
+    quoted strings, comments, domain literals and non-ASCII are rejected.
+    Non-ASCII is rejected *before* case folding, because `str.lower()` maps some
+    non-ASCII letters (U+212A KELVIN SIGN) to ASCII. `build_mime` re-parses the rendered `To`/`From` headers and
     refuses to build unless each holds exactly the approved mailbox.
 20. **Identity closure.** Do-not-contact matching, duplicate outreach and the
     prior-contact/reply search addresses use one identity: the closure over
     confirmed merges, exact known addresses (any confidence) and ORCID/OpenAlex.
     Entries recorded by address or identifier resolve to every record carrying
     them. Name + institution never joins an identity (review warning only).
+    Identifiers are canonical on write (note 25), so URL and bare forms of the
+    same ORCID iD or OpenAlex author ID are one identity.
 21. **Metadata-only guard.** `assert_metadata_only` is a positive allowlist:
     get requests need `format=metadata`, a non-empty header allowlist subset
     and exactly the fixed fields mask; list requests need exactly the ids-only
@@ -180,7 +189,26 @@ narrows behavior in the conservative direction. None of them changes a decision.
     another page on 127.0.0.1 cannot lock the applicant out (Pause included).
 23. **Log redaction.** A redacting formatter redacts the complete output,
     including tracebacks and stack info; the filter never raises into the
-    caller; uvicorn's loggers are routed through the redacting handlers.
+    caller, even when the message object itself cannot be rendered. Every
+    pattern is linear on hostile input (matches start only at the beginning of
+    a character run; runs are possessive), so a long hyphenated URL cannot stall
+    logging. Percent-escapes of address characters (`%2B %2D %2E %27 %5F %40`)
+    are decoded before masking so URL-encoded plus addresses are masked whole;
+    nothing else is decoded. uvicorn's loggers are routed through the redacting
+    handlers, which holds only if the server is started with
+    `UVICORN_LOG_KWARGS` (`log_config=None`, no access log); the P0.3/P5
+    launcher must pass them.
 24. **Missed-window containment.** A snapshot that fails its hash check during
     the missed-window rule sends only that message to review
     (`snapshot_invalid`); the rule continues for the others.
+25. **Canonical scholarly identifiers.** `Pi.orcid`/`DoNotContact.orcid` are
+    stored as `0000-0000-0000-000X` (URL prefix, spaces and missing hyphens
+    removed, check character upper-cased, ISO 7064 MOD 11-2 verified);
+    `openalex_id` as the author ID `A…` (URL prefixes removed; work,
+    institution and other entity IDs refused). Malformed values are rejected,
+    never stored; the future do-not-contact UI must show the rejection and let
+    the request be recorded by PI record or address instead.
+26. **Window widening is judged by slots.** A window change needs explicit
+    confirmation when any (weekday, time) it allows is allowed by neither the
+    default nor the previous window, not when a single key exceeds both. The
+    windows are half-open, so touching intervals cover each other.
