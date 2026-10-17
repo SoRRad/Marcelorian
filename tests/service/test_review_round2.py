@@ -275,6 +275,30 @@ def test_corrupted_snapshot_is_contained_per_message(factory) -> None:
         assert s.get(ApprovalSnapshot, s.get(Message, bad).current_snapshot_id).end_reason == (
             "snapshot_invalid"
         )
+        # The healthy one went to review on its own merits, not as collateral.
+        assert s.get(ApprovalSnapshot, s.get(Message, good).current_snapshot_id).end_reason == (
+            "missed_window"
+        )
+
+
+def test_damaged_snapshot_does_not_affect_a_considered_message(factory) -> None:
+    """Note 24 / acceptance 72: only the damaged message goes to review."""
+    world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
+    bad = world.draft_and_approve(world.campaign(world.pi(world.institution())))
+    good = world.draft_and_approve(world.campaign(world.pi(world.institution())))
+    with transaction(world.factory) as s:
+        snap = s.get(ApprovalSnapshot, s.get(Message, bad).current_snapshot_id)
+        snap.canonical_json = snap.canonical_json.replace("Synthetic", "Tampered")
+    world.settings(pending_per_institution=0)  # keep the healthy one deferred, not sent
+    world.clock.set(resolve_local(datetime(2026, 10, 20, 9, 30), NY))
+    assert world.worker_cycle(good).reason == "over_capacity"  # functioning consideration
+    world.clock.set(resolve_local(datetime(2026, 10, 20, 11, 5), NY))
+    with transaction(world.factory) as s:
+        actions = dict(scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s)))
+    assert actions == {bad: "needs_reapproval", good: "rolled"}
+    message = world.message(good)
+    assert message.state == MessageState.APPROVED_QUEUED.value
+    assert message.eligible_window_start == resolve_local(datetime(2026, 10, 21, 8, 0), NY)
 
 
 def test_cap_deferral_without_a_current_sync_is_not_functioning(factory) -> None:
@@ -299,6 +323,34 @@ def test_cap_deferral_without_a_current_sync_is_not_functioning(factory) -> None
     with transaction(world.factory) as s:
         actions = scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s))
     assert actions == [(mid, "needs_reapproval")]
+
+
+@pytest.mark.parametrize(
+    ("age", "functioning"),
+    [
+        (timedelta(minutes=15), True),  # exactly the owner-delegated bound (note 3)
+        (timedelta(minutes=15, seconds=1), False),
+        (timedelta(minutes=45), False),
+    ],
+)
+def test_current_sync_bound_is_fifteen_minutes(factory, age, functioning) -> None:
+    synced = resolve_local(datetime(2026, 10, 20, 9, 0), NY)
+    world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
+    world.connect_mailbox()
+    world.set_mode(Mode.LIVE)
+    mid = world.draft_and_approve(world.campaign(world.pi(world.institution()), Mode.LIVE))
+    world.settings(real_submissions_per_24h=0)  # local deferral before any network step
+    with transaction(world.factory) as s:
+        sync_svc.record_sync_success(s, "real", synced, None, synced)
+    world.clock.set(synced + age)
+    assert world.dispatch(mid).reason == "budget"
+    with transaction(world.factory) as s:
+        flags = list(
+            s.scalars(
+                select(DispatchEvaluation.functioning).where(DispatchEvaluation.message_id == mid)
+            )
+        )
+    assert flags == [functioning]
 
 
 def test_cap_deferral_with_a_current_sync_rolls(factory) -> None:
