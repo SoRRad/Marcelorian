@@ -224,20 +224,25 @@ def test_app_paths_shape() -> None:
 # -- review round 3: linear redaction, encoded addresses, unprintable messages, uvicorn ---------
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "key-" * 5000,
-        "-".join(["retina", "glaucoma", "session", "token", "cookie", "code", "eye"]) * 700,
-        "a." * 20000,
-        "abc.def-" * 5000 + "x",
-        "x-" * 3000 + "@",
-    ],
-)
-def test_redaction_stays_linear_on_long_hyphenated_or_dotted_runs(text) -> None:
+#: Built inside the test: pytest puts parameter values into the test ID, and Windows
+#: caps the PYTEST_CURRENT_TEST environment variable at 32767 characters.
+_LONG_RUNS = {
+    "key-hyphen": lambda: "key-" * 5000,
+    "hyphen-words": lambda: (
+        "-".join(["retina", "glaucoma", "session", "token", "cookie", "code", "eye"]) * 700
+    ),
+    "dotted": lambda: "a." * 20000,
+    "dotted-hyphenated": lambda: "abc.def-" * 5000 + "x",
+    "hyphens-then-at": lambda: "x-" * 3000 + "@",
+}
+
+
+@pytest.mark.parametrize("name", sorted(_LONG_RUNS))
+def test_redaction_stays_linear_on_long_hyphenated_or_dotted_runs(name) -> None:
     """A quadratic pattern took minutes on 4-20 KB of such text (a logging DoS)."""
     import time
 
+    text = _LONG_RUNS[name]()
     started = time.perf_counter()
     redact(text)
     assert time.perf_counter() - started < 0.5
