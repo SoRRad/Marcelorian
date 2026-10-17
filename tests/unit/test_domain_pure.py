@@ -457,6 +457,15 @@ def test_normalize_address_rejects_non_single_addresses(bad: str) -> None:
         "a@x.test\nBcc: z@q.test",
         "mailto:",
         "x" * 65 + "@x.test",
+        # percent-encoded or "mailto://" URI remainders (RFC 6068 links)
+        "mailto:%20real-pi@synthetic-univ.test",
+        "mailto:real%2Dpi@synthetic-univ.test",
+        "mailto://real-pi@synthetic-univ.test",
+        "real%40pi@synthetic-univ.test",
+        "a/b@x.test",
+        # non-ASCII that str.lower() would fold to ASCII (U+212A KELVIN SIGN)
+        "\u212aate@x.test",
+        "a@\u212aellogg.test",
     ],
 )
 def test_normalize_address_accepts_only_a_strict_addr_spec(bad: str) -> None:
@@ -526,3 +535,62 @@ def test_random_walks_never_leave_sent(path: list[MessageState]) -> None:
         if target in MESSAGE_TRANSITIONS[state]:
             state = target
     assert state is MessageState.SENT
+
+
+# -- canonical ORCID / OpenAlex identifiers (spec §3, C7; review round 3) ----------------------
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "0000-0002-1825-0097",
+        "https://orcid.org/0000-0002-1825-0097",
+        "http://www.orcid.org/0000-0002-1825-0097",
+        "orcid.org/0000-0002-1825-0097",
+        " 0000000218250097 ",
+    ],
+)
+def test_orcid_forms_share_one_canonical_value(raw: str) -> None:
+    from marcelorian.domain.scholarly_ids import canonical_orcid
+
+    assert canonical_orcid(raw) == "0000-0002-1825-0097"
+
+
+def test_orcid_check_character_x_is_upper_case() -> None:
+    from marcelorian.domain.scholarly_ids import canonical_orcid
+
+    assert canonical_orcid("0000-0002-1694-233x") == "0000-0002-1694-233X"
+
+
+@pytest.mark.parametrize(
+    "bad", ["0000-0002-1825-0098", "0000-0002-1825-009", "orcid", "", "0000-0002-1825-009٧"]
+)
+def test_malformed_orcid_is_rejected(bad: str) -> None:
+    from marcelorian.domain.scholarly_ids import IdentifierError, canonical_orcid
+
+    with pytest.raises(IdentifierError):
+        canonical_orcid(bad)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "A5023888391",
+        "a5023888391",
+        "https://openalex.org/A5023888391",
+        "https://api.openalex.org/authors/A5023888391",
+        " openalex.org/A5023888391 ",
+    ],
+)
+def test_openalex_author_forms_share_one_canonical_value(raw: str) -> None:
+    from marcelorian.domain.scholarly_ids import canonical_openalex_author_id
+
+    assert canonical_openalex_author_id(raw) == "A5023888391"
+
+
+@pytest.mark.parametrize("bad", ["W5023888391", "https://openalex.org/I123", "A", "A12x", ""])
+def test_non_author_openalex_ids_are_rejected(bad: str) -> None:
+    from marcelorian.domain.scholarly_ids import IdentifierError, canonical_openalex_author_id
+
+    with pytest.raises(IdentifierError):
+        canonical_openalex_author_id(bad)

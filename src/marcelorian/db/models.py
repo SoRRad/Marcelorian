@@ -28,6 +28,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 
 from marcelorian.db.types import UTCDateTime
 from marcelorian.domain.recipients import normalize_address
+from marcelorian.domain.scholarly_ids import canonical_openalex_author_id, canonical_orcid
 
 NAMING = {
     "ix": "ix_%(column_0_label)s",
@@ -157,6 +158,15 @@ class Pi(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime]
 
+    @validates("orcid")
+    def _canonical_orcid(self, _key: str, value: str | None) -> str | None:
+        # Identity matching compares identifiers exactly (spec §3, C7).
+        return canonical_orcid(value) if value is not None else None
+
+    @validates("openalex_id")
+    def _canonical_openalex(self, _key: str, value: str | None) -> str | None:
+        return canonical_openalex_author_id(value) if value is not None else None
+
 
 class PiEmail(Base):
     __tablename__ = "pi_email"
@@ -215,6 +225,18 @@ class DoNotContact(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime]
     created_by: Mapped[str] = mapped_column(String(32))
+
+    @validates("email")
+    def _canonical_email(self, _key: str, value: str | None) -> str | None:
+        return normalize_address(value) if value is not None else None
+
+    @validates("orcid")
+    def _canonical_orcid(self, _key: str, value: str | None) -> str | None:
+        return canonical_orcid(value) if value is not None else None
+
+    @validates("openalex_id")
+    def _canonical_openalex(self, _key: str, value: str | None) -> str | None:
+        return canonical_openalex_author_id(value) if value is not None else None
 
 
 class RecipientAllowlist(Base):

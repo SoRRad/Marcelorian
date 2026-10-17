@@ -12,12 +12,14 @@ from marcelorian.domain.enums import Mode
 
 # A strict RFC 5322 addr-spec, ASCII only. The local part is a dot-atom built
 # from atext minus "=" and "?" (so it can never resemble an RFC 2047 encoded
-# word); quoted strings, comments, group syntax (":" / ";"), domain literals
-# and non-ASCII are all rejected. Every comparison in the app (allowlist,
+# word) and minus "%" and "/" (so a percent-encoded or "mailto://" URI remainder
+# is rejected instead of being stored as a different mailbox); quoted strings,
+# comments, group syntax (":" / ";"), domain literals and non-ASCII are all
+# rejected. Every comparison in the app (allowlist,
 # real-PI, do-not-contact, duplicate outreach, prior contact) runs on this
 # canonical form, and build_mime re-parses the rendered header to confirm the
 # delivered mailbox is exactly this address.
-_ATEXT = r"[a-z0-9!#$%&'*+/^_`{|}~-]"
+_ATEXT = r"[a-z0-9!#$&'*+^_`{|}~-]"
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 _ADDRESS = re.compile(
     rf"{_ATEXT}+(?:\.{_ATEXT}+)*@(?:{_LABEL}\.)+[a-z]{{2,63}}",
@@ -38,7 +40,12 @@ def normalize_address(address: str) -> str:
     A pasted ``mailto:`` link prefix is removed first; the remainder must then
     be a single plain address with nothing else (no display name, no query).
     """
-    cleaned = address.strip().lower()
+    stripped = address.strip()
+    if not stripped.isascii():
+        # Before case folding: str.lower() maps some non-ASCII letters (e.g. U+212A
+        # KELVIN SIGN) to ASCII, which would silently rewrite the address.
+        raise RecipientError("not a single plain email address")
+    cleaned = stripped.lower()
     if cleaned.startswith(_MAILTO):
         cleaned = cleaned[len(_MAILTO) :].strip()
     if (

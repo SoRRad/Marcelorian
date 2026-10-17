@@ -180,18 +180,25 @@ def _was_considered(
 
 
 def _considerable_portions(
-    session: Session, message: Message, snapshot: ApprovalSnapshot, settings: AppSettings
+    session: Session,
+    message: Message,
+    snapshot: ApprovalSnapshot,
+    settings: AppSettings,
+    not_before: datetime | None = None,
 ) -> list[tuple[datetime, datetime]]:
     """The part of the assigned window in which the message could have been considered.
 
-    It starts at the latest of the window start, the approval and the due time, keeps
-    only instants the *current* window policy permits (blackouts, narrowed hours), and
-    drops deliberate pause and inactive-mode time (B7).
+    It starts at the latest of the window start, the approval and the due time (and
+    ``not_before``: time already judged as part of an earlier window), keeps only
+    instants the *current* window policy permits (blackouts, narrowed hours), and drops
+    deliberate pause and inactive-mode time (B7).
     """
     assert message.eligible_window_start is not None and message.eligible_window_end is not None
     start = max(message.eligible_window_start, snapshot.approved_at)
     if message.due_at is not None:
         start = max(start, message.due_at)
+    if not_before is not None:
+        start = max(start, not_before)
     end = message.eligible_window_end
     policy = policy_for(snapshot, settings)
     permitted = permitted_intervals(start, end, load_zone(message.pi_timezone), policy)
@@ -213,15 +220,29 @@ def apply_missed_window_rule(
     for message in messages:
         snapshot = session.get(ApprovalSnapshot, message.current_snapshot_id)
         assert snapshot is not None and message.eligible_window_end is not None
-        end = message.eligible_window_end
+        first_end = missed_end = message.eligible_window_end
         try:
-            portions = _considerable_portions(session, message, snapshot, settings)
-            if _was_considered(session, message, portions):
-                tz = load_zone(message.pi_timezone)
-                due = message.due_at or now
-                window = next_window(max(now, due), tz, policy_for(snapshot, settings))
+            tz = load_zone(message.pi_timezone)
+            policy = policy_for(snapshot, settings)
+            judged_until: datetime | None = None
+            missed = False
+            # Judge every window that has passed, in order: the assigned one, then each
+            # next eligible window up to now. A window considered by a functioning worker
+            # rolls the message on; the first one that passed unattended needs review.
+            while message.eligible_window_end <= now:
+                missed_end = message.eligible_window_end
+                portions = _considerable_portions(
+                    session, message, snapshot, settings, not_before=judged_until
+                )
+                if not _was_considered(session, message, portions):
+                    missed = True
+                    break
+                judged_until = message.eligible_window_end
+                window = next_window(max(judged_until, message.due_at or judged_until), tz, policy)
                 message.eligible_window_start = window.start
                 message.eligible_window_end = window.end
+            if not missed:
+                assert message.eligible_window_start is not None
                 audit(
                     session,
                     at=now,
@@ -229,7 +250,10 @@ def apply_missed_window_rule(
                     entity_type="message",
                     entity_id=message.id,
                     action="window_rolled",
-                    detail={"from_end": end.isoformat(), "to_start": window.start.isoformat()},
+                    detail={
+                        "from_end": first_end.isoformat(),
+                        "to_start": message.eligible_window_start.isoformat(),
+                    },
                     mode=message.mode,
                 )
                 results.append((message.id, "rolled"))
@@ -241,7 +265,7 @@ def apply_missed_window_rule(
             # Untrustworthy evidence never rolls a message forward; contained per message
             # so one bad snapshot cannot stop the rule (or startup recovery) for others.
             reason = "snapshot_invalid"
-        _require_reapproval(session, message, snapshot, end, reason, actor=actor, now=now)
+        _require_reapproval(session, message, snapshot, missed_end, reason, actor=actor, now=now)
         results.append((message.id, "needs_reapproval"))
     return results
 

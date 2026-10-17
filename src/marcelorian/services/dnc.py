@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from marcelorian.db.models import DoNotContact, Pi, PiEmail
 from marcelorian.domain.enums import Actor, Mode
 from marcelorian.domain.recipients import normalize_address
+from marcelorian.domain.scholarly_ids import canonical_openalex_author_id, canonical_orcid
 from marcelorian.services.audit import audit
 
 
@@ -72,8 +73,8 @@ def identity_closure(
 ) -> Identity:
     ids: set[int] = set()
     addrs = {a.strip().lower() for a in addresses if a}
-    orc = {o for o in orcids if o}
-    oa = {o for o in openalex if o}
+    orc = {canonical_orcid(o) for o in orcids if o}
+    oa = {canonical_openalex_author_id(o) for o in openalex if o}
     seeds = set(pi_ids)
     while True:
         if addrs:

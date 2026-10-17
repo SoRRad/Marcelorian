@@ -196,3 +196,44 @@ def test_blackout_defers_eligible_window_not_due(world) -> None:
     message = world.message(mid)
     assert message.due_at == world.clock.now()  # due date untouched (acceptance 18)
     assert message.eligible_window_start == resolve_local(datetime(2026, 12, 1, 8, 0), NY)
+
+
+# -- every passed window is judged, not just the assigned one (review round 3) ----------------
+
+
+def test_windows_passed_during_a_long_outage_require_reapproval(queued) -> None:
+    world, camp, mid = queued
+    world.settings(pending_per_institution=0)
+    world.clock.set(at(20, 9))
+    assert world.worker_cycle(mid).reason == "over_capacity"  # Tuesday was considered
+    world.clock.set(resolve_local(datetime(2026, 11, 3, 9, 0), NY))  # two weeks later
+    assert apply_rule(world) == [(mid, "needs_reapproval")]
+    assert world.campaign_row(camp).state == CampaignState.PAUSED_REVIEW.value
+    with transaction(world.factory) as s:
+        from marcelorian.db.models import CampaignPause
+
+        pause = s.query(CampaignPause).filter_by(campaign_id=camp).one()
+    assert pause.source_ref.endswith(at(21, 11).isoformat())  # Wednesday was the missed one
+
+
+def test_each_considered_window_rolls_to_the_first_one_after_now(queued) -> None:
+    world, _camp, mid = queued
+    world.settings(pending_per_institution=0)
+    for day in (20, 21):  # Tuesday and Wednesday both considered by a healthy worker
+        world.clock.set(at(day, 9))
+        world.worker_cycle(mid)
+    world.clock.set(at(22, 7))  # Thursday before the window
+    assert apply_rule(world) == [(mid, "rolled")]
+    message = world.message(mid)
+    assert (message.eligible_window_start, message.eligible_window_end) == (at(22, 8), at(22, 11))
+
+
+def test_widened_policy_does_not_count_an_evaluation_twice(queued) -> None:
+    """A same-day wider window after the assigned one is judged only from its end."""
+    world, _camp, mid = queued
+    world.settings(pending_per_institution=0)
+    world.clock.set(at(20, 9))
+    world.worker_cycle(mid)  # considered inside the assigned Tue 08:00-11:00
+    world.settings(window_end="16:00")  # widened afterwards
+    world.clock.set(at(20, 16, 5))  # nobody evaluated Tue 11:00-16:00
+    assert apply_rule(world) == [(mid, "needs_reapproval")]
