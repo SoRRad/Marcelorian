@@ -21,7 +21,7 @@ The application promises **duplicate-execution protection and conservative handl
 - Prefer boring, well-maintained, pinned libraries. Do not add agent frameworks, a cloud queue, a service account, an admin dashboard, or new paid services.
 - **Repository publication is conditional (A1–A2).** Inspect the actual remote, branches, permissions, and visibility first. Publish to the remote only when it is confirmed private and writable; otherwise keep working in local Git and report the condition. Never force-push, overwrite branches, change visibility or branch protection, or merge.
 - **Development is not Windows acceptance (A3).** The cross-platform core may be developed and unit-tested on Linux. Windows-specific adapters sit behind explicit interfaces. Windows CI results, and interactive desktop behavior (OAuth, tray, toasts, sleep/resume, Credential Manager), are reported separately; mocks never establish desktop acceptance.
-- Decisions taken after the v2 review are recorded in `docs/DECISIONS.md` with their IDs (A1–D5). This spec remains the single source of rules.
+- Decisions taken after the v2 review are recorded in `docs/DECISIONS.md` with their IDs (A1–D5, W1). This spec remains the single source of rules.
 
 ---
 
@@ -481,7 +481,7 @@ All counts are per mode, except the real-submission budget and pacing ledger, wh
   - The UI explains that this can need applicant action: cancel an excess unsent campaign, restore the limit, or wait for an already-contacted campaign to release capacity. It does not claim that rolling to another window will resolve it.
   - Example (required test): two reserved but unsent initials under a newly lowered limit of one may both be blocked. Cancelling either releases its reservations and permits the other. There is no hidden permanent lock and no automatic cancellation.
   - Existing follow-ups need no new pending or new-contact slot. They still obey the current 24-hour budget, pacing, windows, approval, and reply checks.
-  - A cap-only deferral is never a missed-window/re-approval event (§9.4).
+  - A cap-only deferral is never by itself a missed-window/re-approval event; a window whose only evaluations ran without a current sync still goes to review (§9.4).
 - **Adjustable limits (B16):** defaults are 25 real submissions per rolling 24 hours, 2 pending per institution, 1 per lab, and 3 new contacts per institution per rolling 30 days.
   - There are no hardcoded ceilings. Values must be finite, sensible integers.
   - Any increase above a default needs explicit warning/confirmation and is audited.
@@ -724,7 +724,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 56. A reply, revocation, persistent pause, mode switch, or do-not-contact entry recorded during preflight prevents submission at the atomic claim (B10).
 57. Concurrent claims (UI approval, scheduler tick, recovery) yield exactly one Gmail call; the unique unresolved-attempt index rejects a second unresolved attempt (B10).
 58. Every held-budget transition: hold → used at the established submission time; hold → released on definite rejection; hold retained while uncertain; uncertain → released only on recorded definite non-submission; uncertain → used on confirmed send; each attempt counted exactly once (B13, B17).
-59. Cap-reduction recovery: two reserved, unsent initials under a newly lowered limit of one are both blocked as `over_capacity`; cancelling either releases its reservations and permits the other; a lowered 24-hour budget defers follow-ups too; a cap-only deferral is not a missed window (B6, B17).
+59. Cap-reduction recovery: two reserved, unsent initials under a newly lowered limit of one are both blocked as `over_capacity`; cancelling either releases its reservations and permits the other; a lowered 24-hour budget defers follow-ups too; a cap-only deferral is not by itself a missed window (B6, B17).
 60. Mode-switch isolation: switching pauses dispatch until explicitly resumed; inactive-mode messages are neither dispatched nor treated as missed; stored modes never change; real-send pacing is not reset (B8, B9).
 61. A delayed send result arriving after a genuine reply is recorded without overwriting `conversation`; the reply freed the pending slot, but the attempt, budget, and contact-ledger entries remain (B13).
 62. Uncertain-send recovery never restarts a stopped or closed campaign and never clears an unrelated pause reason (B13).

@@ -143,7 +143,10 @@ def in_month_day_range(day: date, start: MonthDay, end: MonthDay) -> bool:
 
 @dataclass(frozen=True)
 class WindowPolicy:
-    """When sends may *start*, in the PI's local time (spec §1: Tue-Thu 08:00-11:00)."""
+    """When sends may *start*, in the PI's local time.
+
+    Spec §1: default Tue-Thu 08:00-11:00; adjustable within Mon-Fri 08:00-16:00 (W1).
+    """
 
     weekdays: frozenset[int] = field(default_factory=lambda: frozenset({1, 2, 3}))  # Mon=0
     start: time = time(8, 0)
