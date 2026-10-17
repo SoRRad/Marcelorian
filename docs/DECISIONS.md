@@ -1,0 +1,186 @@
+# Marcelorian — Decision Record (pre-P0 review)
+
+This file records the owner's resolutions to the pre-P0 review questions
+(A1–D5). The resolutions are folded into `MARCELORIAN_SPEC.md`, which stays the
+**single specification**. This file explains *why* each patched sentence
+changed and where it is enforced. If the two ever disagree, the spec wins and
+the disagreement is a bug to report.
+
+- Source: owner response "Marcelorian: owner response to the pre-P0 review" (2026-10-16).
+- The original v2 spec is preserved unchanged in Git history (local `main`,
+  commit `705e13b`, "Add Marcelorian build specification (v2), unchanged").
+- Status meaning:
+  - **P0** = implemented and unit-tested in P0.1–P0.2.
+  - **Doc** = recorded in the spec now and implemented in the phase shown.
+  - **Process** = applies to how the build is run, not to app behavior.
+
+## Decision matrix
+
+| ID | Topic | Resolution (summary) | Spec sections patched | Status / phase | Enforced by / tests |
+|---|---|---|---|---|---|
+| A1–A2 | Repository bootstrap | Inspect the remote first. Create `main` with the unchanged spec **only if** the remote is confirmed empty **and private**. Otherwise continue locally and report. Never force-push, change visibility or branch protection, or merge. | §0 | Process | Remote found **public** and empty on 2026-10-16, so all work stays in local Git and nothing was pushed (see handoff). |
+| A3 | Linux development ≠ Windows acceptance | Cross-platform core is developed on Linux. Windows adapters sit behind explicit interfaces. Tests may inject an in-memory secret store that production code can never discover or select. No plaintext fallback. No live credentials in development or CI. Windows CI results are reported separately from interactive desktop behavior (OAuth, tray, toast, sleep/resume, Credential Manager). The runbook, allowlist checklist and redacted report template are prepared for the P0.3 gate. **Deferral (recorded choice):** the spike launcher code and the real Gmail adapter it drives are written only after the separate P0.3 approval, so nothing that can send real email exists before it (spec §18 aligned). Operator details are collected on the test machine, never committed. | §0, §2, §12, §18 | P0 (interfaces, store) | `platform/secrets.py`, `tests/fakes/secrets.py`; `tests/security/test_platform_security.py` |
+| A4 | CI and costs | Ubuntu + Windows test jobs only. No applicant secrets, no live calls, least-privilege `permissions`. Job timeouts and cancellation of superseded runs. Recheck billing docs before running. Never enable overages or change budgets. Desktop OAuth client config stays untracked, and it is **not** a mailbox token. Installer/release builds remain P5. | §2, §17 | P0 (workflow file only) | `.github/workflows/ci.yml` (supplied, not run: see handoff) |
+| B1 | Pure safety rules move into P0 | Window/due-date math, calendar months, campaign/message transitions, reservations, and budget rules are built and tested in P0.1–P0.2 with a fake transport and an injected clock. P2 keeps drafting/review integration. P3 keeps tray automation. One production gateway throughout. | §0, §18 | P0 | `domain/*`, `services/*`; `tests/unit/`, `tests/service/` |
+| B2 | Transport-test schedule override | Allowed **only** in `transport_test`, only after P0.3 authorization. The approved snapshot visibly binds the override, actual allowlisted recipient, fake PI identity, and shortened timing. Gateway, approval, exact-recipient checks, uncertainty handling, the shared real-send budget, and pacing still apply. Live rejects any override. No global "always open" flag. | §9.1, §9.4, §12 | P0 | `domain/snapshot.py`, `services/gateway.py`; `tests/service/test_modes.py`, `tests/unit/test_domain_pure.py` |
+| B3 | Cancel before first send | An unsent Email 1 campaign returns to `candidate`. The logical message and audit history are kept. Capacity and projected-contact reservations are released. Re-drafting creates a new revision that needs fresh approval. Only allowed with no sent message and no in-flight or uncertain attempt. A missing `sent_at` is not proof of non-submission. Never resets uncertainty or bypasses reconciliation, do-not-contact, or prior-contact checks. | §3, §9.1, §11, §19 (8) | P0 | `services/approvals.py`; `tests/service/test_approvals.py`, `tests/service/test_reservations.py` |
+| B4 | Reservations after failure or re-approval | A campaign that legitimately owns reservations keeps them through `failed_definite` and `needs_reapproval`, until re-approval or explicit cancellation/closure. The UI shows that capacity remains reserved. Moving into review never creates a reservation. | §3, §11 | P0 | `services/reservations.py`; `tests/service/test_reservations.py` |
+| B5 | Follow-up revoke and stop | **Revoke**: approved, unclaimed follow-up → `awaiting_approval`; slot kept. **"Stop this follow-up sequence"**: no further generation/dispatch; slot kept until the applicant closes with a reason or deliberately re-drafts the next unsent step. A sent step is never re-drafted. Cancelling a claimed message is not a recall: future steps stop and the attempt is reconciled. A Cancel button never clears an uncertain attempt. | §3, §9.1, §16 | P0 (service); UI wording P2 | `services/approvals.py`; `tests/service/test_approvals.py`, `tests/service/test_gateway_race.py` |
+| B6 | Lowering caps | New limits apply to new initial submissions, including already-reserved unsent initials. These are marked `over_capacity` (approvals and records kept). This may need applicant action: cancel an excess campaign, restore the limit, or wait for a contacted campaign to release capacity. Rolling windows are never promised to resolve it. Cancelling either of two blocked initials releases its reservations and unblocks the other. No hidden lock, no automatic cancellation. Follow-ups need no new slot but still obey the 24 h budget, pacing, windows, approval, and reply checks. A cap-only deferral is not a missed window. | §11, §19 (6) | P0 | `services/reservations.py`, `services/gateway.py`; `tests/service/test_cap_reduction.py` |
+| B7 | Missed-window policy | Re-approval is required when an assigned eligible window passes with **no functioning dispatch/safety evaluation** during the portion in which the approved message could have been considered, because the worker or required connectivity/sync was unavailable. Evaluations and their deferral reasons are recorded; a process heartbeat is not proof of Gmail coverage. Approval near a window's end counts only the remaining portion. Missing recovery evidence → review. Brief restarts, pacing/cap deferrals, deliberate persistent pause, and deliberate mode switches do not by themselves invalidate approval. | §9.4, §19 (17), §21 | P0 | `services/scheduling.py` (`apply_missed_window_rule`); `tests/service/test_missed_window.py` |
+| B8 | Pacing | Spacing is serialized and persisted across actual Gmail submissions in live **and** transport_test, regardless of PI time zone. Sandbox has separate simulated pacing. Restarts and mode switches do not reset spacing. A test-window override does not bypass pacing. | §9.4, §11 | P0 | `services/pacing.py`, `pacing_state` table; `tests/service/test_gateway.py` (pacing), `tests/service/test_modes.py` (shared ledger) |
+| B9 | Mode behavior | One active dispatch/generation mode. Gmail sync and reconciliation continue for all real campaigns of the connected mailbox, including inactive-mode ones. A mailbox-level cursor/coverage record is valid only after both real modes' full range is processed. A mode switch is an intentional pause, not a missed window. Dispatch resumes explicitly. Switching never changes a stored message's mode. | §3, §9.4, §12 | P0 (mode/pause state, gateway checks); sync P3 | `services/runtime.py`; `tests/service/test_modes.py` |
+| B10 | Current sync and final authorization | An incremental sync runs right before sending. A global unresolved gap blocks all real sends. A thread-specific problem pauses only that campaign; mailbox/credential failures are never mislabeled thread-specific. After network preflight, the atomic claim re-reads message, approval, campaign stop/review status, active mode, persistent pause, do-not-contact, reservations, and budget. Due time, window, pause/cancellation, and pacing are rechecked immediately before Gmail is invoked; if preflight crosses 11:00 PI local time, nothing is submitted. The cancel/submit hand-off is serialized. Recall is not promised after the claim commits. No DB transaction is held across network calls. | §9.6, §10 (Known limit), §19 (25) | P0 | `services/gateway.py`; `tests/service/test_gateway_race.py` |
+| B11 | New-thread replies, test contacts | A possible reply from a known PI address in a **new** thread pauses for confirmation (`ambiguous_thread`) instead of freeing capacity. A test address stands in for the PI only inside its transport_test mapping. One active transport_test campaign per allowlisted recipient. Known real-PI addresses are rejected from the allowlist. Test addresses are never promoted into live identities. | §10, §12 | P0 (allowlist, mapping, uniqueness); classifier P3 | `services/recipients.py`, `domain/recipients.py`, `domain/mime.py`; `tests/unit/test_domain_pure.py`, `tests/service/test_modes.py`, `tests/service/test_review_round2.py` |
+| B12 | Message identifiers | RFC Message-ID = unique opaque value + the verified sender's email domain, never the hostname. A distinct value per authorized attempt, kept through that attempt's reconciliation and never regenerated after an empty search. `X-Marcelorian-Id` is kept: opaque value, no personal data, visible correlation header (not a secret). It is added to the metadata-header allowlist for the P0.3 preservation test. Message-ID is evidence, not a provider idempotency guarantee. | §9.6, §10 | P0 | `domain/identifiers.py`, `domain/gmail_params.py`; `tests/unit/test_domain_pure.py`, `tests/service/test_gateway.py` |
+| B13 | Resolving uncertainty | Budget is released only when definite non-submission is supported and recorded, never because a Sent search is empty. A fresh approval is required before another attempt. Recovery never forces the campaign to `outreach_pending` or restarts a stopped sequence. A late successful result never overwrites a newer conversation/closed state. A genuine reply frees the pending slot but not an unresolved submission/contact ledger entry. One resolved pause reason never clears another. The established actual submission time drives accounting and intervals; reconciliation time and provenance are kept too; uncertain timestamp evidence → review. | §3, §9.6, §11 | P0 | `domain/transitions.py`, `services/campaigns.py`, `services/reconciliation.py`, `services/send_results.py`; `tests/service/test_recovery.py` |
+| B14 | Prior-contact review | Options: "acknowledge these reviewed messages and proceed" or "close". Acknowledgment is scoped to mailbox + campaign + exact Gmail IDs. It never ignores future mail, bypasses do-not-contact, or permits a duplicate sequence. Search uses exact known addresses, full pagination, spam/trash included, drafts excluded. Hits show minimal metadata + "Open in Gmail"; no bodies or snippets. An incomplete search is not a clean result. New unacknowledged hits trigger review. The app's own attempts are reconciled first. | §9.6 | P0 (service, query); UI P2/P3 | `services/prior_contact.py`; `tests/service/test_inbound_and_contact.py`, `tests/service/test_review_round2.py` |
+| B15 | Email format | Plain-text body, no tracking. Applicant-approved professional URLs (e.g., ORCID) are allowed. Email 2 says "my earlier email" (not "my note below"). No automatic recursive quoting in v1. CV attachments required on Emails 1 and 4. | §8.1, §9.7 | P0 (plain-text MIME); templates P2 | `domain/mime.py`; `tests/unit/test_domain_pure.py` |
+| B16 | Adjustable caps | No hardcoded ceilings. Defaults: 25 real submissions/rolling 24 h, 2 pending per institution, 1 per lab, 3 new contacts per institution/rolling 30 days. Values must be finite and sensible. Increases above defaults need explicit confirmation and are audited. Pacing stays positive (default 2–6 min). No control can disable approval, recipient validation, uncertainty handling, or reply checks. Debug settings are impossible in live. | §1, §11, §16 | P0 | `config/settings.py`; `tests/service/test_settings.py` |
+| B17 | Budget meaning | "Reminders" = Emails 2–4. Live + transport_test share the real-submission ledger; sandbox never consumes it. Each attempt counts once (hold converts to usage). Definite non-acceptance releases the hold; uncertainty keeps it until resolved. A lowered 24 h budget can block follow-ups too. | §11 | P0 | `services/budget.py`; `tests/service/test_recovery.py` (held-budget transitions, 24 h boundary) |
+| B18 | Profile edits | Changing a fact, signature field, role phrase, or other value used by an unsent approved message → re-approval. Unrelated edits do not. Per-dependency versions are recorded, not a global profile version check. Final contact/timezone checks also apply at dispatch. | §4, §8.3, §9.1 | P0 | `approval_dependency` table, `services/approvals.py`; `tests/service/test_approvals.py` |
+| B19 | CV versions | A new CV upload never changes or invalidates an approved frozen attachment. The UI shows the queued version and offers revoke/re-draft. Replacing the attachment **of that message** invalidates its approval. Acceptance test 9 corrected. | §9.1, §19 (9, 10) | P0 | `services/approvals.py`; `tests/service/test_approvals.py` |
+| B20 | Approval prerequisites | Approval requires a verified time zone, a send-ready exact recipient, and a reviewed salutation. Role/affiliation uncertainty and eligibility/funding flags are surfaced honestly. Mutable safety/contact prerequisites are rechecked at dispatch. | §6, §9.1, §9.6 | P0 | `services/approvals.py`, `services/gateway.py`; `tests/service/test_approvals.py` |
+| C1 | Funding preference | Unknown funding stays eligible and marked. The preference formerly called "paid only" is renamed **"Exclude explicitly unpaid opportunities; unknown funding allowed."** Pilot default stays "paid preferred, unpaid acceptable". Neither a grant nor a listing without stated compensation makes an appointment explicitly paid. | §4, §7, §19 (40) | Doc (P1/P2) | — |
+| C2 | Manual facts | Manual facts use an explicit "Save and confirm" action, with provenance `applicant_entered`. Autosave never confirms proposed facts. AI-extracted and imported facts require applicant confirmation. Self-reported facts are never labelled externally verified. | §4 | Doc (P1); provenance column exists in P0 schema | — |
+| C3 | Names and availability | Email 1's introduction uses the full name. Closings of Emails 2–4 use the explicit signature-name preference, defaulting to the full name (never an automatic informal first name). Availability shows Month YYYY; duration only when confirmed. Never invent a date or duration. | §8.1, §8.2 | Doc (P2) | — |
+| C4 | Applicant edits and evidence | Evidence links stay only on claims they still support. Edited claims are marked applicant-written/review-required until confirmed. Deterministic checks rerun. The edited email is never sent back to the AI. Whole-body editing cannot change recipient or subject. | §8.2, §8.3, §16 | Doc (P2) | — |
+| C5 | Templates | Subject fixed from specialty config (exact en dash, normalized `Re:` chain). Body templates editable. CV required on Emails 1 and 4. Every attachment frozen in the snapshot. | §8.1, §16 | P0 (subject rules); templates P2 | `domain/subjects.py`; `tests/unit/test_domain_pure.py` |
+| C6 | Sandbox time | Injected simulated clock with an advance-time control. The real timing/state rules run, not a simplified scheduler. Shortened intervals in transport_test only as an explicit approved override. | §12 | P0 (clock seam); UI P2 | `clock.py` |
+| C7 | Do-not-contact | Matches verified PI identity and aliases, confirmed merged records, exact known addresses, and reliable ORCID/OpenAlex associations. Name + institution alone → review warning only. Merges keep restrictions and history. Simulated DNC events never edit the live DNC list. | §3, §4, §10 | P0 (check + scoping); UI P1/P3 | `services/dnc.py` (`identity_closure`); `tests/service/test_inbound_and_contact.py`, `tests/service/test_review_round2.py` |
+| C8 | N-day final interval | The N-day alternative uses calendar days in the PI's time zone, with documented DST handling. Emails 2 and 3 stay 7×24 h. Calendar-month clamping unchanged. | §1, §9.3 | P0 | `domain/timing.py`; `tests/unit/test_timing.py` |
+| C9 | Shared vs isolated mode data | Real profile/PI/evidence/assessment records may be reused across modes. Edits to shared data are visible and follow re-approval rules. Synthetic identities and simulated state cannot corrupt live records or be promoted. Campaigns, approvals, logical messages, thread mappings, institution/lab capacity, projected contacts, exports, and reports are mode-specific. **Exceptions:** mailbox synchronization and the real Gmail submission/pacing ledger are shared by live and transport_test. The owner report is live-only by default. | §3, §11, §12, §13 | P0 (partitioning) | `tests/service/test_modes.py` |
+| D1 | Early follow-up drafting | Deferred. The next step is generated when due, as specified. | — | Not adopted | — |
+| D2 | 14-day approval expiry | Deferred. v1 uses only the missed-window and content-change rules. | — | Not adopted | — |
+| D3 | Claude key validation | Later local setup may do an authenticated model-metadata lookup with no generation request. It is labelled credential/model-access validation, not proof of billing, budget, or generation. P0 makes no live provider calls. | §2, §16 | Doc (P1) | — |
+| D4 | Tooling | ruff, strict typing for safety-critical modules, property-based tests for timing and cap boundaries. Otherwise proportionate. | §2 | P0 | `pyproject.toml` (ruff, mypy); `hypothesis` tests in `tests/unit/test_timing.py` (timing) and `tests/service/test_handoff_coverage.py` (24 h / 30-day boundaries) |
+| W1 | Send window adjustability | Owner answer to note 7 (2026-10-16): the window may be **widened** as well as narrowed, anywhere within **Mon–Fri 08:00–16:00** PI local time. The default stays Tue–Thu 08:00–11:00. Widening beyond the default is a less-conservative change: explicit confirmation, audited. The window end replaces the fixed 11:00 limit in every check (claim, preflight crossing, missed-window portion). | §1, §9.4, §9.6, §16, §19 (15, 55) | P0 | `config/settings.py` (`WINDOW_OUTER_*`); `tests/service/test_settings.py`, `tests/service/test_gateway.py`, `tests/service/test_gateway_race.py` |
+| D5 | Canned sandbox drafts | Clearly labelled canned synthetic drafts in sandbox, so practice and tests need no AI spend. They are not validated AI output or live-send-ready. No credentials needed for offline work. | §12 | Doc (P2) | — |
+
+## P0 implementation notes (behavior chosen inside the decisions, documented here)
+
+These notes give concrete code-level meaning to the resolutions above. Each one
+narrows behavior in the conservative direction. None of them changes a decision.
+
+1. **Rolling-window boundary.** An event at time `t` counts in a rolling window
+   of length `W` evaluated at `now` iff `t > now - W`. An event exactly 24 h (or
+   30 days) old no longer counts. There is no upper bound, so a send time that
+   Gmail reports slightly ahead of the local clock counts at once. Held
+   (in-flight/uncertain) budget entries count regardless of age until resolved.
+2. **Point of no recall.** The atomic claim transaction is the final
+   authorization. It re-reads everything listed in B10, checks window/due/
+   pacing, records the attempt as `in_flight`, and commits. Only an in-memory
+   call separates that commit from `messages.send`; the MIME is built from the
+   snapshot before the claim. Cancellation committed before the claim prevents
+   submission. Cancellation after it is recorded as a stop request and the
+   attempt is reconciled.
+3. **Missed-window evidence.** Dispatch evaluations are stored per message
+   with `functioning` set only when the worker ran with valid authorization and
+   a current sync: Gmail coverage at most 15 minutes old (three 5-minute polling
+   cycles) at the evaluation's start, with no open gap. (The owner delegated
+   this value on 2026-10-16; `CURRENT_SYNC_TOLERANCE` in `services/scheduling.py`.) This is decided from
+   the recorded worker state, not from the deferral reason, so a local cap or
+   pacing deferral while coverage is stale is not consideration. Deferrals
+   meaning the check itself could not run (sync, auth, search or transport
+   unavailable) are never functioning; `own_attempt_unresolved` (a deliberate
+   hold by a healthy worker) is. Each evaluation is timestamped when that dispatch attempt
+   *began*, so a preflight that crosses 11:00 still counts as considered inside
+   the window. Deliberate pause and inactive-mode intervals come from the
+   runtime-state log. Deferrals caused by those deliberate states never count
+   as proof of consideration. A window counts as "considered" only if a
+   functioning evaluation falls inside the window ∩ [approval time, …), minus
+   the deliberate-pause and inactive-mode time. If that remaining portion is
+   empty, the message simply rolls to the next window.
+4. **Sandbox sender.** Sandbox snapshots use the fixed sender
+   `sandbox-sender@marcelorian.invalid`; sandbox never needs a Gmail connection.
+5. **Local UI session.** The bootstrap token travels in the URL fragment, so it
+   never reaches server logs. A static page POSTs it to `/bootstrap/exchange`,
+   which is the only state change, so no GET changes state. Sessions are
+   held in memory and end when the app process exits.
+6. **Schema scope.** P0 creates the sending, identity, and audit tables.
+   Discovery-only tables (`evidence`, `grant_evidence`, `opportunity`,
+   `assessment`, `task`) arrive with their phases via new Alembic migrations.
+7. **Window settings.** Originally resolved as "narrow only". The owner
+   answered on 2026-10-16 (decision W1): the window may be adjusted anywhere
+   within Mon–Fri 08:00–16:00 PI local time; the default stays Tue–Thu
+   08:00–11:00, and widening beyond it needs explicit confirmation.
+8. **Transport-test self-send.** When the transport_test recipient is the
+   connected sender itself, the external prior-contact search and the
+   new-thread reply search are skipped, because the sender's own address
+   matches the whole mailbox. The own-attempt check and the thread check still
+   run (spec §12: a self-send tests connectivity only).
+9. **Duplicate outreach at dispatch.** Email 1 re-runs the duplicate-outreach
+   check at the local check and at the atomic claim, over the identity closure
+   (note 20). Another same-mode campaign counts when it is active, has a sent
+   message, or has an attempt that was or may have been submitted (sent,
+   in flight or uncertain) to any address of that identity. If two queued initials become one
+   person through a merge, both are blocked until the applicant cancels one
+   and re-approves the other.
+10. **Prior-contact exclusions.** Only this campaign's own messages are
+    excluded from prior-contact hits. Messages the app sent for other campaigns
+    are prior contact. Unresolved attempts are counted only within the same
+    mailbox (live + transport_test, or sandbox). In live and sandbox, a hit
+    that is the app's own message for another campaign blocks as
+    `duplicate_outreach` and is never offered for acknowledgment. In
+    transport_test the address is a reusable allowlisted tester, so earlier
+    test mail there stays an ordinary, reviewable hit.
+11. **A cancel recorded during submission.** It takes effect once
+    non-submission is definite (definite rejection, or recorded non-submission
+    of an uncertain attempt). An Email 1 then follows the B3 path (campaign
+    back to `candidate`, reservations released); a follow-up is cancelled.
+    Approval is refused while such a request is pending; a deliberate re-draft
+    clears it.
+12. **Next step after a stopped sequence.** After a send, the next step's due
+    time is recorded whenever the campaign still holds outreach, even if the
+    sequence was stopped. `sequence_stopped` blocks automatic generation (P3)
+    and dispatch, and keeps the B5 exit (deliberate re-draft) reachable.
+13. **Drafted dependency versions.** A draft records the fact versions and the
+    PI version (salutation) its text was written from. Approval is refused
+    with `dependency_changed_since_draft` if any of them changed, so the
+    applicant re-drafts first.
+14. **Confirmed-sent resolution.** Resolving an uncertain attempt as sent
+    requires its Gmail message and thread IDs, so follow-ups can thread on the
+    real conversation.
+15. **Settings sanity.** The N-day final interval is limited to 1–365 days.
+    Blackout settings that leave no send day for 365 days or more are rejected.
+    The check scans a full 28-year calendar cycle plus one year (weekday/date
+    alignment and every blackout rule repeat on it), counts the runs at both
+    ends, and treats fewer than two send days as invalid. Approval still maps
+    a scheduling failure to `ApprovalError(no_permitted_window)`.
+16. **Missed-window portion.** The considered portion starts at the latest of
+    the window start, the approval time and the due time. It contains only
+    instants that the *current* window policy permits, which honors blackouts
+    and narrowed hours added after approval. Deferrals for `outside_window`,
+    `not_due`, `paused` and `mode_inactive` are never treated as consideration.
+    A mailbox-level sync gap is checked before any cap or pacing deferral.
+17. **Reconnect clears the auth block.** A verified (re)connection with both
+    required scopes clears the global Gmail auth block. A connection missing a
+    scope keeps it.
+18. **Changes during preflight.** If the message was claimed, revoked or
+    re-approved by another caller during the network preflight, the result is
+    `changed_during_preflight` and nothing about the message is altered.
+19. **Canonical addresses.** Every address (PI emails, allowlist, do-not-contact
+    entries, snapshot recipients) is one strict, lower-cased RFC 5322 addr-spec:
+    a dot-atom local part without `=` or `?`, an ASCII host name, at most 254
+    characters. A pasted `mailto:` prefix is removed first; display names,
+    group syntax, quoted strings, comments, domain literals and non-ASCII are
+    rejected. `build_mime` re-parses the rendered `To`/`From` headers and
+    refuses to build unless each holds exactly the approved mailbox.
+20. **Identity closure.** Do-not-contact matching, duplicate outreach and the
+    prior-contact/reply search addresses use one identity: the closure over
+    confirmed merges, exact known addresses (any confidence) and ORCID/OpenAlex.
+    Entries recorded by address or identifier resolve to every record carrying
+    them. Name + institution never joins an identity (review warning only).
+21. **Metadata-only guard.** `assert_metadata_only` is a positive allowlist:
+    get requests need `format=metadata`, a non-empty header allowlist subset
+    and exactly the fixed fields mask; list requests need exactly the ids-only
+    mask; unknown parameters are refused.
+22. **Cookie parsing.** The session cookie is parsed one pair at a time, and
+    every same-named value is tried, so a malformed or decoy cookie set by
+    another page on 127.0.0.1 cannot lock the applicant out (Pause included).
+23. **Log redaction.** A redacting formatter redacts the complete output,
+    including tracebacks and stack info; the filter never raises into the
+    caller; uvicorn's loggers are routed through the redacting handlers.
+24. **Missed-window containment.** A snapshot that fails its hash check during
+    the missed-window rule sends only that message to review
+    (`snapshot_invalid`); the rule continues for the others.

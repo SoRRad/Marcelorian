@@ -1,0 +1,3 @@
+# Specialty configuration (spec §5). P0 uses only display_name, which appears
+# in the fixed Email 1 subject. Discovery fields are added in P1.
+display_name: Ophthalmology

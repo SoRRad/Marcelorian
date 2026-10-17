@@ -1,0 +1,106 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marcelorian"
+version = "0.0.1"
+description = "Marcelorian - May the Force Hire You. Applicant-approved research-position outreach (pilot)."
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+# Direct dependencies are pinned exactly (spec §0: boring, pinned libraries).
+# The full transitive lock lives in requirements/lock.txt (uv pip compile --universal).
+dependencies = [
+    "fastapi==0.142.2",
+    "uvicorn==0.54.0",
+    "jinja2==3.1.6",
+    "python-multipart==0.0.32",
+    "sqlalchemy==2.0.54",
+    "alembic==1.20.0",
+    "keyring==25.7.0",
+    "pyyaml==6.0.3",
+    "tzdata==2026.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-timeout==2.4.0",
+    "hypothesis==6.168.3",
+    "httpx==0.28.1",
+    "ruff==0.16.10",
+    "mypy==2.4.0",
+    "types-PyYAML==6.0.12.20260906",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+marcelorian = [
+    "ui/templates/*.html",
+    "ui/static/*",
+    "db/migrations/*.py",
+    "db/migrations/script.py.mako",
+    "db/migrations/versions/*.py",
+    "db/alembic.ini",
+    "specialties/*.yaml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+timeout = 60
+markers = [
+    "windows_only: exercises a real Windows adapter; skipped on other platforms",
+]
+filterwarnings = [
+    "error::DeprecationWarning:marcelorian.*",
+    # Test-client transport notice from Starlette; affects tests only.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "DTZ", "SIM", "RUF"]
+ignore = [
+    "S101",   # assert is fine in tests
+    "RUF001", # the en dash in the fixed subject is intentional
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "S311", "DTZ001"]
+"src/marcelorian/db/migrations/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+mypy_path = "src"
+packages = ["marcelorian"]
+exclude = ["src/marcelorian/db/migrations/"]
+
+# Strict typing for safety-critical modules (decision D4).
+[[tool.mypy.overrides]]
+module = [
+    "marcelorian.clock",
+    "marcelorian.domain.*",
+    "marcelorian.services.*",
+    "marcelorian.transport.*",
+    "marcelorian.config.*",
+    "marcelorian.platform.secrets",
+]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["keyring.*"]
+ignore_missing_imports = true
