@@ -119,6 +119,7 @@ def test_followups_unaffected_by_pending_caps_but_obey_lowered_budget(world) -> 
     assert world.dispatch(m2).outcome is Outcome.SENT
 
 
+@pytest.mark.narrow_window
 def test_cap_only_deferral_is_not_missed_window(world) -> None:
     inst = world.institution()
     a, b = world.campaign(world.pi(inst)), world.campaign(world.pi(inst))

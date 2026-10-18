@@ -177,6 +177,7 @@ def test_approval_binds_snapshot_and_dependencies(world) -> None:
     assert kinds == ["cv_version", "institution", "pi", "pi_email", "profile_fact"]
 
 
+@pytest.mark.narrow_window
 def test_button_label_and_expected_time(world) -> None:
     camp = world.campaign(world.pi(world.institution()))
     outcome = world.approve(world.draft(camp))

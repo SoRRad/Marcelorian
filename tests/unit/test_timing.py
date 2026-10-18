@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -27,7 +28,9 @@ from marcelorian.domain.timing import (
 
 NY = ZoneInfo("America/New_York")
 LA = ZoneInfo("America/Los_Angeles")
-POLICY = WindowPolicy()
+DEFAULT_POLICY = WindowPolicy()
+#: Narrowed window (the pre-W1 default); the edge tests below are written against it.
+POLICY = WindowPolicy(weekdays=frozenset({1, 2, 3}), end=time(11))
 
 
 def utc(*args: int) -> datetime:
@@ -37,9 +40,19 @@ def utc(*args: int) -> datetime:
 # -- windows -------------------------------------------------------------------
 
 
-def test_default_window_is_tue_to_thu_0800_to_1100() -> None:
-    assert POLICY.weekdays == frozenset({1, 2, 3})
-    assert (POLICY.start, POLICY.end) == (time(8), time(11))
+def test_default_window_is_mon_to_fri_0800_to_1600() -> None:
+    # Owner W1 (2026-10-17): the default is the widest allowed window.
+    assert DEFAULT_POLICY.weekdays == frozenset({0, 1, 2, 3, 4})
+    assert (DEFAULT_POLICY.start, DEFAULT_POLICY.end) == (time(8), time(16))
+
+
+def test_default_window_edges_and_weekend() -> None:
+    friday_1559 = resolve_local(datetime(2026, 10, 23, 15, 59), NY)
+    assert in_window(friday_1559, NY, DEFAULT_POLICY)
+    assert not in_window(friday_1559 + timedelta(minutes=1), NY, DEFAULT_POLICY)
+    window = next_window(friday_1559 + timedelta(minutes=1), NY, DEFAULT_POLICY)
+    assert window.start == resolve_local(datetime(2026, 10, 26, 8, 0), NY)
+    assert window.end == resolve_local(datetime(2026, 10, 26, 16, 0), NY)
 
 
 def test_window_start_inclusive_end_exclusive_in_pi_zone() -> None:
@@ -64,7 +77,7 @@ def test_window_uses_pi_zone_not_applicant_zone() -> None:
     assert not in_window(instant, LA, POLICY)
 
 
-def test_monday_friday_weekend_never_in_window() -> None:
+def test_narrowed_window_excludes_monday_friday_and_weekend() -> None:
     for day in (19, 23, 24, 25):  # Mon, Fri, Sat, Sun in Oct 2026
         assert not in_window(resolve_local(datetime(2026, 10, day, 9, 0), NY), NY, POLICY)
 
@@ -191,7 +204,7 @@ def test_blackouts_off_by_default() -> None:
 
 
 def test_federal_holiday_blackout_defers_to_next_window() -> None:
-    policy = WindowPolicy(blackout_federal_holidays=True)
+    policy = replace(POLICY, blackout_federal_holidays=True)
     thanksgiving_morning = resolve_local(datetime(2026, 11, 26, 9, 0), NY)
     assert not in_window(thanksgiving_morning, NY, policy)
     assert next_window(thanksgiving_morning, NY, policy).start == resolve_local(
@@ -243,17 +256,19 @@ zones = st.sampled_from(
 
 
 @settings(max_examples=300, deadline=None)
-@given(after=instants, tz=zones)
-def test_next_window_is_valid_and_earliest(after: datetime, tz: ZoneInfo) -> None:
-    window = next_window(after, tz, POLICY)
+@given(after=instants, tz=zones, policy=st.sampled_from([POLICY, DEFAULT_POLICY]))
+def test_next_window_is_valid_and_earliest(
+    after: datetime, tz: ZoneInfo, policy: WindowPolicy
+) -> None:
+    window = next_window(after, tz, policy)
     local_start = window.start.astimezone(tz)
     assert window.end > after
-    assert local_start.weekday() in POLICY.weekdays
+    assert local_start.weekday() in policy.weekdays
     assert local_start.time() == time(8, 0)
-    assert window.end.astimezone(tz).time() == time(11, 0)
+    assert window.end.astimezone(tz).time() == policy.end
     probe = after
     while probe < window.start:  # no permitted instant before the returned window
-        assert not in_window(probe, tz, POLICY)
+        assert not in_window(probe, tz, policy)
         probe += timedelta(hours=1)
 
 

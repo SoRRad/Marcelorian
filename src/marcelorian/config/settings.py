@@ -52,9 +52,9 @@ class AppSettings:
     sandbox_submissions_per_24h: int = 25
     pacing_min_seconds: int = 120
     pacing_max_seconds: int = 360
-    window_weekdays: tuple[int, ...] = (1, 2, 3)  # Tue, Wed, Thu (Mon=0)
+    window_weekdays: tuple[int, ...] = (0, 1, 2, 3, 4)  # Mon-Fri (Mon=0); owner W1
     window_start: str = "08:00"
-    window_end: str = "11:00"
+    window_end: str = "16:00"
     last_interval_mode: str = LastIntervalMode.CALENDAR_MONTH.value
     last_interval_days: int = 30
     blackout_federal_holidays: bool = False
@@ -153,9 +153,9 @@ def validate(settings: AppSettings) -> AppSettings:
         policy = normalized.window_policy()
     except ValueError as exc:
         raise SettingsError(str(exc)) from exc
-    # Spec §1 (owner decision W1): the default is Tue-Thu 08:00-11:00; settings may move it
-    # anywhere within Mon-Fri 08:00-16:00 PI local time, never beyond. Widening past the
-    # default needs explicit confirmation and is audited (less_conservative_keys).
+    # Spec §1 (owner decision W1): the default is Mon-Fri 08:00-16:00 PI local time, the
+    # outer bound; settings may narrow it, never go beyond. Re-widening a narrowed window
+    # stays within the default, so it needs no confirmation (less_conservative_keys).
     if not policy.weekdays <= WINDOW_OUTER_WEEKDAYS:
         raise SettingsError("send days must stay within Monday-Friday")
     if policy.start < WINDOW_OUTER_START or policy.end > WINDOW_OUTER_END:

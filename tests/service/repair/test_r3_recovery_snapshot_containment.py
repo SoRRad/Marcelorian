@@ -42,6 +42,7 @@ NY = ZoneInfo("America/New_York")
 
 def test_corrupted_in_flight_snapshot_does_not_abort_startup_recovery(factory) -> None:
     world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
+    world.narrow_window()
     world.connect_mailbox()
     world.set_mode(Mode.LIVE)
     a = world.draft_and_approve(world.campaign(world.pi(world.institution()), Mode.LIVE))

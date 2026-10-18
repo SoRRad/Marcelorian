@@ -321,8 +321,9 @@ class SendGateway:
         extra = (content.to,) if mode is Mode.TRANSPORT_TEST else ()
         if dnc.matches(session, pi.id, mode, extra):
             return _Verdict(Outcome.BLOCKED, "do_not_contact", invalidate=True)
-        if message.step == 1 and approvals.duplicate_outreach(session, campaign, content.to):
-            # Merges or re-discovery after approval must never permit a second sequence.
+        if approvals.duplicate_outreach(session, campaign, content.to, step=message.step):
+            # Merges, re-discovery or an identity link found after approval (even after
+            # both Email 1s went out) must never permit a second sequence.
             return _Verdict(Outcome.BLOCKED, "duplicate_outreach", invalidate=True)
         try:
             validate_recipient(

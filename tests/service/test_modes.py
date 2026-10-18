@@ -75,6 +75,7 @@ def test_test_message_never_becomes_live(world) -> None:
     assert world.gmail.send_calls == []
 
 
+@pytest.mark.narrow_window
 def test_inactive_mode_messages_are_not_missed(world) -> None:
     from marcelorian.config.settings import load_settings
     from marcelorian.services import scheduling

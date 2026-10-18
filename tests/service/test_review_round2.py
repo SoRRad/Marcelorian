@@ -284,6 +284,7 @@ def test_corrupted_snapshot_is_contained_per_message(factory) -> None:
 def test_damaged_snapshot_does_not_affect_a_considered_message(factory) -> None:
     """Note 24 / acceptance 72: only the damaged message goes to review."""
     world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
+    world.narrow_window()
     bad = world.draft_and_approve(world.campaign(world.pi(world.institution())))
     good = world.draft_and_approve(world.campaign(world.pi(world.institution())))
     with transaction(world.factory) as s:
@@ -303,6 +304,7 @@ def test_damaged_snapshot_does_not_affect_a_considered_message(factory) -> None:
 
 def test_cap_deferral_without_a_current_sync_is_not_functioning(factory) -> None:
     world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
+    world.narrow_window()
     world.connect_mailbox()
     world.set_mode(Mode.LIVE)
     with transaction(world.factory) as s:  # last good Gmail coverage: Monday noon
@@ -336,6 +338,7 @@ def test_cap_deferral_without_a_current_sync_is_not_functioning(factory) -> None
 def test_current_sync_bound_is_fifteen_minutes(factory, age, functioning) -> None:
     synced = resolve_local(datetime(2026, 10, 20, 9, 0), NY)
     world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
+    world.narrow_window()
     world.connect_mailbox()
     world.set_mode(Mode.LIVE)
     mid = world.draft_and_approve(world.campaign(world.pi(world.institution()), Mode.LIVE))
@@ -355,6 +358,7 @@ def test_current_sync_bound_is_fifteen_minutes(factory, age, functioning) -> Non
 
 def test_cap_deferral_with_a_current_sync_rolls(factory) -> None:
     world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
+    world.narrow_window()
     world.connect_mailbox()
     world.set_mode(Mode.LIVE)
     mid = world.draft_and_approve(world.campaign(world.pi(world.institution()), Mode.LIVE))
@@ -367,6 +371,7 @@ def test_cap_deferral_with_a_current_sync_rolls(factory) -> None:
     assert actions == [(mid, "rolled")]
 
 
+@pytest.mark.narrow_window
 def test_unresolved_own_attempt_is_a_functioning_safety_hold(world) -> None:
     world.connect_mailbox()
     tester = world.allowlist("tester@example.test")

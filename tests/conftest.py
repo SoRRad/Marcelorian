@@ -73,5 +73,10 @@ def clock() -> ManualClock:
 
 
 @pytest.fixture
-def world(factory: sessionmaker[Session], clock: ManualClock) -> World:
-    return World(factory, clock)
+def world(
+    factory: sessionmaker[Session], clock: ManualClock, request: pytest.FixtureRequest
+) -> World:
+    world = World(factory, clock)
+    if request.node.get_closest_marker("narrow_window"):
+        world.narrow_window()
+    return world

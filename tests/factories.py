@@ -217,6 +217,15 @@ class World:
             if resume:
                 runtime.resume_dispatch(s, actor=Actor.APPLICANT, now=self.clock.now())
 
+    def narrow_window(self) -> None:
+        """Narrow the send window to Tue-Thu 08:00-11:00 (the pre-W1 default).
+
+        Tests of window-edge mechanics use it (directly, or via
+        ``@pytest.mark.narrow_window`` on the ``world`` fixture) so their edges
+        (11:00 end, Thursday close) stay put under the Mon-Fri 08:00-16:00 default.
+        """
+        self.settings(window_weekdays=(1, 2, 3), window_start="08:00", window_end="11:00")
+
     def settings(self, **changes: object) -> None:
         with transaction(self.factory) as s:
             update_settings(

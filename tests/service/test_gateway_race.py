@@ -27,6 +27,8 @@ from marcelorian.services import approvals, dnc, runtime, scheduling
 from marcelorian.services.gateway import Outcome
 from marcelorian.services.inbound import record_inbound
 
+pytestmark = pytest.mark.narrow_window  # window-edge mechanics (11:00 end)
+
 NY = ZoneInfo("America/New_York")
 WEEK = timedelta(hours=168)
 
