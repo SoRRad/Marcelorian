@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/settings">&larr; Settings</a></p>
+{% if error %}<p class="alert">{{ error }}</p>{% endif %}
+{% if notice %}<p class="near">{{ notice }}</p>{% endif %}
+{% if not paths %}
+<section class="card"><h2>Your data</h2><p>Data folders are not available in this session.</p></section>
+{% else %}
+<section class="card" id="exports">
+  <h2>Reports for the program owner</h2>
+  <p class="note">Updated automatically after every change. Send <strong>owner_report.csv</strong> and <strong>status_summary.csv</strong> to the program owner (they never include your notes, CV, visa details or emails). The full lists stay with you.</p>
+  <p>Last updated: {{ export_state.last_success_at or "not yet" }}{% if export_state.stale %} — <span class="warn-text">out of date: {{ export_state.error }}</span>{% endif %}</p>
+  <form method="post" action="/data/export" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Update now</button></form>
+  <ul>{% for mode, path, modified in files %}<li><a href="/data/exports/{{ mode }}/{{ path.name }}">{{ path.name }}</a> <span class="note">{{ "practice" if mode == "sandbox" else ("test" if mode == "transport_test" else "live") }} · {{ modified.strftime("%Y-%m-%d %H:%M") }} UTC</span></li>{% else %}<li>No export files yet.</li>{% endfor %}</ul>
+  <p class="note">Folder: {{ paths.exports_dir }}{% if paths.exports_synced_by_onedrive %} — <span class="warn-text">this folder is synced by OneDrive, so copies leave this computer</span>{% endif %}</p>
+</section>
+
+<section class="card" id="backups">
+  <h2>Backups</h2>
+  <p class="note">A backup is made every day and before every update; the newest {{ keep }} are kept.</p>
+  <form method="post" action="/data/backup" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Back up now</button></form>
+  {% if restore_pending %}
+  <p class="warn-text">A restore is waiting: close Marcelorian and start it again to finish.</p>
+  <form method="post" action="/data/restore/cancel" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Cancel the restore</button></form>
+  {% endif %}
+  {% if backups %}
+  <form method="post" action="/data/restore" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Restore from<select name="name">{% for b in backups %}<option value="{{ b.name }}">{{ b.created_at.strftime("%Y-%m-%d %H:%M") }} UTC · {{ b.label }} · {{ (b.size_bytes / 1024)|round|int }} KB</option>{% endfor %}</select></label>
+    <label class="check"><input type="checkbox" name="confirm" value="yes"> Replace my current data with this backup at the next start (the current data is backed up first)</label>
+    <button type="submit">Restore at next start</button>
+  </form>
+  {% else %}<p>No backups yet.</p>{% endif %}
+  <p class="note">Folder: {{ paths.backups_dir }}. The database is not encrypted; Windows or OneDrive backups may copy it.</p>
+</section>
+
+<section class="card" id="delete">
+  <h2>Delete all my data</h2>
+  <p>This removes your profile, contacts, drafts, the email record, CVs, backups, exports, logs and the saved Claude key from this computer. It cannot be undone.</p>
+  <form method="post" action="/data/delete" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Type {{ confirm_word }} to confirm<input type="text" name="word" autocomplete="off" spellcheck="false"></label>
+    <label class="check"><input type="checkbox" name="confirm" value="yes"> I understand that everything is deleted and Marcelorian closes</label>
+    <button type="submit" class="danger">Delete everything</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

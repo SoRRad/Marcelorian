@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -33,7 +33,15 @@ from marcelorian.config.specialty import load_specialty
 from marcelorian.db.engine import transaction
 from marcelorian.db.models import Campaign, CampaignPause, Message, Task, WorkerHeartbeat
 from marcelorian.domain.enums import Actor, CampaignState, MessageState, Mode
-from marcelorian.services import approvals, drafting, handoff, reconciliation, runtime, scheduling
+from marcelorian.services import (
+    approvals,
+    drafting,
+    exports,
+    handoff,
+    reconciliation,
+    runtime,
+    scheduling,
+)
 from marcelorian.services import sync as sync_svc
 from marcelorian.transport.base import MailTransport
 
@@ -163,6 +171,7 @@ class BackgroundWorker:
         *,
         interval: timedelta = INTERVAL,
         on_cycle: Callable[[CycleResult], None] | None = None,
+        jobs: Sequence[Callable[[], object]] = (),
     ) -> None:
         self._factory = session_factory
         self._clock = clock
@@ -171,6 +180,7 @@ class BackgroundWorker:
         self._syncs = syncs
         self._interval = interval.total_seconds()
         self._on_cycle = on_cycle
+        self._jobs = tuple(jobs)  # after the safety work: exports, daily backup (§9.5)
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
@@ -188,6 +198,11 @@ class BackgroundWorker:
         except Exception:  # keep the worker alive; the stalled notice shows persistent trouble
             log.exception("background cycle failed")
             return None
+        for job in self._jobs:
+            try:
+                job()
+            except Exception:  # a failed export or backup never stops the worker
+                log.exception("background job failed")
         if self._on_cycle is not None:
             self._on_cycle(result)
         return result
@@ -333,6 +348,9 @@ def notices(session: Session, *, now: datetime, campaign_now: datetime) -> list[
                 due_tasks,
             )
         )
+    export_state = exports.load_state(session)
+    if export_state.stale:
+        found.append(Notice("exports_stale", "warn", export_state.error, "/data", 1))
     beat = last_heartbeat(session)
     if beat is not None and now - beat > STALLED_AFTER:
         minutes = int((now - beat).total_seconds() // 60)

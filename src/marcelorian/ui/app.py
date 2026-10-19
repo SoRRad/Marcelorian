@@ -46,9 +46,12 @@ from marcelorian.domain.research import (
     is_web_url,
 )
 from marcelorian.lookups.http import Fetcher, HttpFetcher
+from marcelorian.platform.paths import AppPaths
 from marcelorian.platform.secrets import SecretStore, open_secret_store
 from marcelorian.services import (
     approvals,
+    backup,
+    exports,
     handoff,
     practice,
     profile,
@@ -64,6 +67,7 @@ from marcelorian.services.worker import BackgroundWorker, notices
 from marcelorian.transport.sandbox import SandboxTransport
 from marcelorian.ui import (
     routes_contacts,
+    routes_data,
     routes_messages,
     routes_profile,
     routes_send,
@@ -115,6 +119,8 @@ def create_app(
     fetcher: Fetcher | None = None,
     secrets: Callable[[], SecretStore] | None = None,
     ai_client: ClientFactory | None = None,
+    paths: AppPaths | None = None,
+    request_shutdown: Callable[[], None] | None = None,
 ) -> Any:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     templates = _templates()
@@ -141,7 +147,12 @@ def create_app(
         specialty_display_name=load_specialty().display_name,
     )
     # Started by the launcher (app_main), never by create_app, so tests stay single-threaded.
-    worker = BackgroundWorker(session_factory, clock, practice_clock, transports, syncs)
+    jobs: list[Callable[[], object]] = []
+    if paths is not None:
+        data_paths = paths
+        jobs.append(lambda: exports.refresh(session_factory, data_paths.exports_dir, clock))
+        jobs.append(lambda: backup.daily(data_paths.db_path, data_paths.backups_dir, clock.now()))
+    worker = BackgroundWorker(session_factory, clock, practice_clock, transports, syncs, jobs=jobs)
     app.state.worker = worker
     ui = UIContext(
         templates,
@@ -154,12 +165,15 @@ def create_app(
         secrets or open_secret_store,
         ai_client or AnthropicClient,
         worker,
+        paths,
+        request_shutdown,
     )
     routes_profile.register(app, ui)
     routes_contacts.register(app, ui)
     routes_messages.register(app, ui)
     routes_send.register(app, ui)
     routes_settings.register(app, ui)
+    routes_data.register(app, ui)
 
     @app.get("/api/notices")
     def api_notices() -> JSONResponse:

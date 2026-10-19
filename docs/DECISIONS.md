@@ -543,3 +543,27 @@ owner's written description of each finding.
     (spec §2), the pilot uses the browser's own desktop notifications, which
     the applicant turns on with one click; no extra dependency, and nothing
     runs when the app is closed. A tray icon can follow after the pilot.
+48. **Records, backups and deletion (P4, U4).** Exports go to Documents\
+    Marcelorian\exports (live at the top, practice in `practice\`, transport
+    tests in `test\`): `outreach_contacts.csv`, `email_log.csv` (exact approved
+    text per approval and attempt), and for the owner instead of a Google Sheet
+    `owner_report.csv` (the spec §13 default allowlist; no notes, CV, visa
+    details, addresses or correspondence) and `status_summary.csv` (counts,
+    response rate, places in use, estimated Claude cost). Gmail-specific columns
+    are dropped for the Outlook pilot. Files are rebuilt by the worker whenever
+    the audit log grew, written to a temp file and swapped in atomically, UTF-8
+    with BOM, fully quoted. A file Excel holds open marks the export stale (a
+    notice) and is retried next cycle; sending state is never touched. Formula
+    safety: a cell starting with `= + - @`, tab, CR **or an apostrophe** gets one
+    leading apostrophe, so removing exactly one restores the exact text
+    (property-tested). Backups use the SQLite online backup API with an
+    integrity check: daily (worker), before every database update (launcher),
+    and on demand; the newest 14 are kept. Restore is staged and applied at the
+    next start before the database opens (current data backed up first,
+    WAL/SHM removed), and the restored app starts with sending paused
+    (`restored_backup`). "Delete all my data" (type DELETE): pauses sending,
+    recalls approvals, writes a marker and closes the app; after the server,
+    worker, database and logs are closed it removes the Claude key, the
+    database with WAL/SHM, staged restore, backups, logs and the exports folder,
+    then prints what remains outside the app. An interrupted deletion finishes
+    at the next start. Gmail/Sheet steps of spec §14 do not apply (U3, U4).

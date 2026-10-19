@@ -97,6 +97,11 @@ def outreach_status(session: Session, mode: Mode, scope: str, now: datetime) -> 
     return status
 
 
+def category(campaign: Campaign, any_sent: bool) -> str:
+    """The dashboard bucket for one campaign (also used by the exports)."""
+    return _category(campaign, any_sent)
+
+
 def _category(campaign: Campaign, any_sent: bool) -> str:
     state = CampaignState(campaign.state)
     if state is CampaignState.CANDIDATE:

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block nav %}{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Deleting your data</h2>
+  <p>Sending is stopped. Marcelorian is closing now and removes your data as it closes. The window shows when it is finished.</p>
+  <h3>What stays outside the app</h3>
+  <ul>{% for line in remains %}<li>{{ line }}</li>{% endfor %}</ul>
+</section>
+{% endblock %}
