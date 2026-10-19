@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from marcelorian.db.models import ApplicantProfile, CvVersion, ProfileFact
 from marcelorian.domain.enums import Actor, FactStatus
+from marcelorian.domain.scholarly_ids import IdentifierError, canonical_orcid
 from marcelorian.services import approvals
 from marcelorian.services.audit import audit
 
@@ -35,7 +36,7 @@ class Field:
     key: str
     label: str
     help: str = ""
-    kind: str = "text"  # text | long | month | choice
+    kind: str = "text"  # text | long | month | choice | orcid
     choices: dict[str, str] | None = None
     required: bool = False
 
@@ -48,6 +49,7 @@ FIELDS: tuple[Field, ...] = (
         "Name for closing follow-ups",
         "Defaults to your full name; never shortened automatically.",
     ),
+    Field("orcid", "Your ORCID iD (optional)", "Used to import your publications.", "orcid"),
     Field("degrees", "Degree(s)", "For example MD, MPH."),
     Field("medical_school", "Medical school"),
     Field("graduation_year", "Graduation year"),
@@ -119,6 +121,11 @@ def validate(key: str, value: str) -> str:
         raise ProfileError(f"{field.label} must not contain {{ or }} (template markers)")
     if text and field.kind == "month" and not MONTH.match(text):
         raise ProfileError(f"{field.label} must look like 2027-07")
+    if text and field.kind == "orcid":
+        try:
+            text = canonical_orcid(text)
+        except IdentifierError as exc:
+            raise ProfileError(f"{field.label}: {exc}") from exc
     if text and field.kind == "choice" and field.choices and text not in field.choices:
         raise ProfileError(f"{field.label}: choose one of the listed options")
     return text

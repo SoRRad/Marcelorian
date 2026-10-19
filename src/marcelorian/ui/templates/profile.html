@@ -41,6 +41,25 @@
   <ul>{% for cv in cvs %}<li>{{ cv.filename }} — uploaded {{ cv.uploaded_at.strftime("%Y-%m-%d %H:%M") }} UTC{% if loop.first %} (latest){% endif %}</li>{% else %}<li>No CV uploaded yet.</li>{% endfor %}</ul>
 </section>
 
+<section class="card" id="publications">
+  <h2>Your publications</h2>
+  <p class="note">Imported from PubMed by your ORCID iD (or full name). Confirm the ones that are yours; only confirmed ones can be mentioned.</p>
+  <form method="post" action="/profile/publications/import" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Import from PubMed</button>
+    {% if pub_run %}<span class="note">Last checked {{ pub_run.ran_at.strftime("%Y-%m-%d %H:%M") }} UTC{% if not pub_run.ok %} — {{ pub_run.message }}{% endif %}</span>{% endif %}
+  </form>
+  <ul>
+  {% for p in publications %}
+    <li>{% if p.url %}<a href="{{ p.url }}" target="_blank" rel="noopener noreferrer">{{ p.title }}</a>{% else %}{{ p.title }}{% endif %} <span class="note">{{ p.venue }} {{ p.published_on }}</span>
+      {% if p.status == "confirmed" %}<span class="badge">confirmed</span>{% else %}
+      <form method="post" action="/profile/publications/{{ p.id }}" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" name="decision" value="confirm">Mine</button> <button type="submit" name="decision" value="reject">Not mine</button></form>{% endif %}
+    </li>
+  {% else %}<li>No publications imported yet.</li>{% endfor %}
+  </ul>
+</section>
+
 <section class="card" id="signature">
   <h2>Signature</h2>
   <p class="note">Added to Outlook files and copied text. Outlook on the web adds your account's own signature to links, so you can leave this empty.</p>

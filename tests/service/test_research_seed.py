@@ -433,8 +433,9 @@ def test_research_tables_have_no_link_to_the_send_path() -> None:
     }
     for name in ("research_record", "research_evidence", "research_claim", "research_link"):
         table = Base.metadata.tables[name]
-        targets = {fk.column.table.name for fk in table.foreign_keys}
-        assert not targets & send_tables
+        links = {(fk.parent.name, fk.column.table.name) for fk in table.foreign_keys}
+        # The only link: the applicant's promotion records which contact a lead became.
+        assert {pair for pair in links if pair[1] in send_tables} <= {("promoted_pi_id", "pi")}
     for name in send_tables:
         targets = {fk.column.table.name for fk in Base.metadata.tables[name].foreign_keys}
         assert not targets & {"research_record", "seed_import"}

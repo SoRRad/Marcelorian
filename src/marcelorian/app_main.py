@@ -27,7 +27,7 @@ from typing import Any
 from marcelorian.clock import Clock, SystemClock
 from marcelorian.db.engine import make_engine, make_session_factory, transaction
 from marcelorian.db.migrate import upgrade
-from marcelorian.logging_setup import configure_logging
+from marcelorian.logging_setup import UVICORN_LOG_KWARGS, configure_logging
 from marcelorian.platform.instance_lock import AlreadyRunning, InstanceLock
 from marcelorian.platform.paths import resolve_app_paths
 from marcelorian.services import profile, runtime
@@ -92,7 +92,7 @@ def _serve(app: Any, security: UISecurity, port: int, *, open_browser: bool) -> 
     import uvicorn
 
     server = uvicorn.Server(
-        uvicorn.Config(app, host=HOST, port=port, log_level="warning", access_log=False)
+        uvicorn.Config(app, host=HOST, port=port, log_level="warning", **UVICORN_LOG_KWARGS)  # type: ignore[arg-type]
     )
 
     def when_ready() -> None:

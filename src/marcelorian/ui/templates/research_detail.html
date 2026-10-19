@@ -56,6 +56,36 @@
 </section>
 {% endif %}
 
+<section class="card" id="promote">
+  <h2>Turn into a contact</h2>
+  {% if record.promoted_pi_id %}
+  <p>Turned into a contact on {{ record.promoted_at.strftime("%Y-%m-%d") }} (contact #{{ record.promoted_pi_id }}).</p>
+  {% elif promote.blockers %}
+  <p class="note">Not yet possible:</p>
+  <ul>{% for b in promote.blockers %}<li class="warn-text">{{ b }}</li>{% endfor %}</ul>
+  {% else %}
+  <p class="note">Creates a contact you can draft to later. Nothing is drafted or sent now. The address becomes usable only with the source you give here.</p>
+  {% if promote_error %}<p class="alert">{{ promote_error }}</p>{% endif %}
+  {% if promote.identity %}<p class="note">Matches existing contact{{ "s" if promote.identity|length > 1 else "" }} by address or identifier: {% for p in promote.identity %}{{ p.full_name }}{% if not loop.last %}, {% endif %}{% endfor %}. Saving links this record to it instead of creating a duplicate.</p>{% endif %}
+  <form method="post" action="/research/{{ record.id }}/promote" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Last name <input type="text" name="last_name" maxlength="120" value="{{ promote.last_name }}" required></label>
+    <label>Salutation <input type="text" name="salutation" maxlength="120" value="{{ promote.salutation }}" required></label>
+    <label>Where is {{ record.email }} published for this person?
+      <select name="email_source">{% for key, (grade, label) in promote.email_sources.items() %}<option value="{{ key }}" {% if key == promote.email_source %}selected{% endif %}>{{ label }} (confidence {{ grade }})</option>{% endfor %}</select>
+    </label>
+    <label>Web address of that page <input type="url" name="email_source_url" maxlength="2000" value="{{ promote.email_source_url }}" required></label>
+    <label>Institution time zone
+      <select name="timezone">{% for z in promote.zones %}<option value="{{ z }}" {% if z == promote.zone %}selected{% endif %}>{{ z }}</option>{% endfor %}</select>
+    </label>
+    <label class="check"><input type="checkbox" name="timezone_confirmed" value="yes"> I checked this is the institution's time zone</label>
+    <label>Department or setting (optional) <input type="text" name="department" maxlength="255"></label>
+    {% if promote.same_name %}<label class="check warn-text"><input type="checkbox" name="not_same_person" value="yes"> A contact with the same name exists at this institution ({% for p in promote.same_name %}#{{ p.id }}{% if not loop.last %}, {% endif %}{% endfor %}). I checked this is a different person.</label>{% endif %}
+    <button type="submit" class="primary">Turn into a contact</button>
+  </form>
+  {% endif %}
+</section>
+
 <section class="card">
   <h2>Already in Marcelorian?</h2>
   <ul>

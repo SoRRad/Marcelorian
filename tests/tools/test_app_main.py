@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -11,7 +12,7 @@ from marcelorian.app_main import free_port, main, open_in_browser, prepare_datab
 from marcelorian.clock import ManualClock
 from marcelorian.db.engine import transaction
 from marcelorian.db.models import ApplicantProfile, RuntimeState
-from marcelorian.platform.instance_lock import InstanceLock
+from marcelorian.platform.instance_lock import AlreadyRunning, InstanceLock
 from marcelorian.ui.app import create_app
 from marcelorian.ui.security import UISecurity
 from tests.conftest import TUESDAY_0900_NY
@@ -43,10 +44,17 @@ def test_sign_in_link_opens_a_session(tmp_path: Path) -> None:
     assert "Getting started" in client.get("/").text
 
 
-def test_a_second_launch_is_refused(tmp_path: Path, capsys) -> None:
-    lock = InstanceLock(tmp_path / "instance.lock").acquire()
-    try:
-        assert main(["--data-dir", str(tmp_path), "--no-browser"]) == 2
-    finally:
-        lock.release()
+def test_a_second_launch_is_refused(tmp_path: Path, capsys, monkeypatch) -> None:
+    # The OS lock itself is tested in tests/security; here only the launcher's handling
+    # (in-process double locking differs between Windows and POSIX, so it is faked).
+    class Held(InstanceLock):
+        def acquire(self) -> InstanceLock:
+            raise AlreadyRunning("held")
+
+    monkeypatch.setattr("marcelorian.app_main.InstanceLock", Held)
+    monkeypatch.setattr("marcelorian.app_main.configure_logging", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "marcelorian.app_main._serve", lambda *a, **k: pytest.fail("must not serve")
+    )
+    assert main(["--data-dir", str(tmp_path), "--no-browser"]) == 2
     assert "already running" in capsys.readouterr().out

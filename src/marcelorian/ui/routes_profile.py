@@ -12,6 +12,7 @@ from marcelorian.config.settings import SettingsError, load_settings, set_signat
 from marcelorian.db.engine import transaction
 from marcelorian.domain.enums import Actor
 from marcelorian.domain.recipients import RecipientError
+from marcelorian.lookups import enrich
 from marcelorian.services import approvals, profile
 from marcelorian.ui.context import UIContext
 
@@ -37,6 +38,8 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 "signature_done": settings.signature_step_done,
                 "mailbox": approvals._active_mailbox(db),
                 "error": request.query_params.get("error", ""),
+                "publications": enrich.applicant_publications(db, me.id),
+                "pub_run": enrich.last_runs(db, None).get("pubmed"),
             }
         return ui.render(request, "profile.html", context)
 
@@ -83,6 +86,30 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 now=now,
             )
         return _back("cv")
+
+    @app.post("/profile/publications/import")
+    def import_publications() -> RedirectResponse:
+        with transaction(ui.session_factory) as db:
+            me = profile.applicant(db, ui.clock.now())
+            facts = profile.facts(db, me.id)
+            name = facts["full_name"].value if "full_name" in facts else ""
+            orcid = facts["orcid"].value if "orcid" in facts else ""
+        result = enrich.gather_applicant_publications(name, orcid, ui.fetcher)  # no DB open
+        with transaction(ui.session_factory) as db:
+            enrich.store_applicant_publications(db, me.id, result, ui.clock.now())
+        return _back("publications", None if result.ok else result.message)
+
+    @app.post("/profile/publications/{publication_id}")
+    def decide_publication(publication_id: int, decision: str = Form(...)) -> RedirectResponse:
+        with transaction(ui.session_factory) as db:
+            me = profile.applicant(db, ui.clock.now())
+            try:
+                enrich.decide_publication(
+                    db, me.id, publication_id, confirm=decision == "confirm", now=ui.clock.now()
+                )
+            except LookupError as exc:
+                raise HTTPException(status_code=404) from exc
+        return _back("publications")
 
     @app.post("/profile/signature")
     def save_signature(signature: str = Form("")) -> RedirectResponse:
