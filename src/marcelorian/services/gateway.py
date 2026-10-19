@@ -343,8 +343,8 @@ def apply_verdict(
     *,
     functioning: bool | None = None,
 ) -> DispatchResult:
-    """Record a refusal or deferral; ``functioning`` overrides the B7 evaluation rule
-    (the Outlook hand-off has no mailbox sync, see ``handoff.hand_off``)."""
+    """Record a refusal or deferral; ``functioning`` overrides the recorded evaluation
+    flag (the Outlook hand-off has no mailbox sync, see ``handoff.hand_off``)."""
     if verdict.invalidate and message.state == MessageState.APPROVED_QUEUED.value:
         snapshot = session.get(ApprovalSnapshot, message.current_snapshot_id)
         if snapshot is not None and snapshot.state == SnapshotState.ACTIVE.value:

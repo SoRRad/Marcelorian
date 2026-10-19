@@ -51,6 +51,7 @@ def ny(*args: int) -> datetime:
 def outlook(world: World) -> World:
     world.connect_handoff_mailbox()
     world.set_mode(Mode.LIVE)
+    world.signature_step()  # first use: no signature (S8)
     return world
 
 
@@ -480,13 +481,13 @@ def test_a_click_held_by_the_app_counts_for_the_missed_window_rule(outlook: Worl
     assert outlook.message_state(mids[3]) is MessageState.APPROVED_QUEUED
 
 
-def test_window_passing_without_a_click_still_needs_reapproval(outlook: World) -> None:
+def test_window_passing_without_a_click_rolls(outlook: World) -> None:
     _camp, mid = _email1(outlook)
     outlook.clock.set(ny(2026, 10, 20, 16, 30))
     reconciliation.startup_recovery(outlook.factory, {Mode.LIVE: outlook.gmail}, {}, outlook.clock)
-    assert (
-        outlook.message_state(mid) is MessageState.NEEDS_REAPPROVAL
-    )  # note 35, pending S-decision
+    assert outlook.message_state(mid) is MessageState.APPROVED_QUEUED  # S7: no re-approval
+    outlook.clock.set(ny(2026, 10, 21, 9, 0))
+    assert outlook.hand_off(mid).outcome == "handed_off"
 
 
 def test_reopened_handoff_keeps_the_signature_it_was_handed_off_with(outlook: World) -> None:
@@ -511,3 +512,30 @@ def test_unbuildable_email_records_no_handoff(outlook: World, monkeypatch) -> No
     assert (result.outcome, result.reason) == ("blocked", "email_not_buildable")
     assert outlook.attempts(mid) == [] and _budget(outlook) == []
     assert outlook.message_state(mid) is MessageState.NEEDS_REAPPROVAL
+
+
+# -- owner decision S8: signature at first use ---------------------------------------------
+
+
+def test_first_handoff_waits_for_the_signature_step(world: World) -> None:
+    world.connect_handoff_mailbox()
+    world.set_mode(Mode.LIVE)
+    _camp, mid = _email1(world)
+    assert _readiness(world, mid).reason == "signature_step_required"
+    result = world.hand_off(mid)
+    assert (result.outcome, result.reason) == ("blocked", "signature_step_required")
+    assert world.attempts(mid) == [] and world.message_state(mid) is MessageState.APPROVED_QUEUED
+    world.signature_step("A. Applicant, MD\nResearch Fellow")
+    assert _readiness(world, mid).ready
+    result = world.hand_off(mid)
+    assert result.package and result.package.body.endswith("A. Applicant, MD\nResearch Fellow\n")
+
+
+def test_skipping_the_signature_step_is_allowed(world: World) -> None:
+    world.connect_handoff_mailbox()
+    world.set_mode(Mode.LIVE)
+    world.signature_step("")  # Outlook on the web still adds its own to the link
+    _camp, mid = _email1(world)
+    result = world.hand_off(mid)
+    assert result.outcome == "handed_off" and result.package
+    assert result.package.body == world.message(mid).draft_body

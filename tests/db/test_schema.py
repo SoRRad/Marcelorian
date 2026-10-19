@@ -172,6 +172,7 @@ def test_one_open_handoff_per_message(world) -> None:
 
     world.connect_handoff_mailbox()
     world.set_mode(Mode.LIVE)
+    world.signature_step()
     camp = world.campaign(world.pi(world.institution()), Mode.LIVE)
     mid = world.draft_and_approve(camp)
     assert world.hand_off(mid).outcome == "handed_off"

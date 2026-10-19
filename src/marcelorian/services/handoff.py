@@ -83,6 +83,8 @@ _TIMED = frozenset(
 )
 
 HANDED_OFF = "handed_off"
+#: Readiness/hand-off reason until the first-use signature step is done (S8).
+SIGNATURE_STEP = "signature_step_required"
 
 
 class HandoffError(RuntimeError):
@@ -215,6 +217,8 @@ def readiness(
     confirmation = (
         _required_confirmation(message, None) if channel is Channel.OUTLOOK_HANDOFF else None
     )
+    if channel is Channel.OUTLOOK_HANDOFF and not settings.signature_step_done:
+        return Readiness(False, SIGNATURE_STEP, None, confirmation)
     verdict = final_checks(session, message, settings, now, preflight_started=None, channel=channel)
     timed = verdict is not None and verdict.outcome is Outcome.DEFERRED and verdict.reason in _TIMED
     if channel is Channel.OUTLOOK_HANDOFF and (verdict is None or timed):
@@ -284,6 +288,11 @@ def hand_off(
     mode = Mode(message.mode)
     if not mode.is_real:
         return HandoffResult(Outcome.NOT_ELIGIBLE.value, "handoff_real_modes_only")
+    if approvals.active_channel(session) is Channel.OUTLOOK_HANDOFF and not (
+        settings.signature_step_done
+    ):
+        # First use: the applicant adds a signature or skips it (S8); nothing recorded.
+        return HandoffResult(Outcome.BLOCKED.value, SIGNATURE_STEP)
     missing = _required_confirmation(message, confirmations)
     if missing is not None:
         # Nothing is recorded: the applicant has not yet confirmed the mailbox check.
@@ -303,9 +312,8 @@ def hand_off(
         except (ValueError, SnapshotError):
             verdict = Verdict(Outcome.BLOCKED, "email_not_buildable", invalidate=True)
     if verdict is not None:
-        # The click itself proves the app was running: a deliberate hold (pacing, budget,
-        # capacity, open hand-offs) is a functioning evaluation for the B7 rule, as a
-        # Gmail evaluation with a current sync is; no mailbox sync exists here.
+        # The click itself proves the app was running: recorded as a functioning
+        # evaluation (audit), as a Gmail evaluation with a current sync would be.
         result = apply_verdict(session, message, verdict, now, now, functioning=True)
         return HandoffResult(result.outcome.value, result.reason)
     assert package is not None

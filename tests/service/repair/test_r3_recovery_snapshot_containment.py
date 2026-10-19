@@ -68,9 +68,10 @@ def test_corrupted_in_flight_snapshot_does_not_abort_startup_recovery(factory) -
         world.clock,
     )
 
-    # B's window passed with the worker off: the rule must still have run for it.
-    assert dict(result["missed_window"]).get(b) == "needs_reapproval"
-    assert world.message_state(b) is MessageState.NEEDS_REAPPROVAL
+    # B's window passed with the worker off: the rule must still have run for it (S7: it
+    # rolls, A's damaged snapshot does not affect it).
+    assert dict(result["missed_window"]).get(b) == "rolled"
+    assert world.message_state(b) is MessageState.APPROVED_QUEUED
     # A is never resent; it stays held (uncertain or sent-with-review), never re-queued.
     assert len(world.gmail.send_calls) == 1
     assert world.message_state(a) is not MessageState.APPROVED_QUEUED

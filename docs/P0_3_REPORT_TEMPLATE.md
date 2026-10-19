@@ -68,3 +68,15 @@ was only simulated (fake transport) before this run.
 | Both allowlist entries deactivated | |
 | Stored token removed (`disconnect`), or kept for L3 observation | |
 | Local spike output kept only on the laptop | |
+
+## 6. P0.3b Outlook hand-off (separate approval)
+
+| # | Check | Result (pass / fail / skipped) | Notes (redacted) |
+|---|---|---|---|
+| B1 | Link opens pre-filled (To, en-dash subject, body); Outlook signature added | | |
+| B2 | File opens editable; app signature at end; CV attached; no From to fill | | |
+| B3 | Reply-and-paste follow-up arrives in the same conversation with one `Re:` | | |
+| B4 | File follow-up: same conversation or new one (owner thread test) | | |
+| B5 | Not sent: needs re-approval; nothing reached R2 | | |
+| B6 | PI replied: campaign in conversation, no next step offered | | |
+| — | Real sends in total (must be ≤ 6) | | |

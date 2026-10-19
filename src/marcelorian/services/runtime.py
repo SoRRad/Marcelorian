@@ -14,12 +14,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from marcelorian.db.models import RuntimeState, RuntimeStateLog
 from marcelorian.domain.enums import Actor, Mode, RuntimePauseReason
-from marcelorian.domain.timing import merge_intervals
 from marcelorian.services.audit import audit
 
 
@@ -204,41 +202,3 @@ def set_auth_block(session: Session, blocked: bool, reason: str | None, *, now: 
         action="auth_block" if blocked else "auth_unblock",
         reason=reason,
     )
-
-
-def deliberate_unavailable_intervals(
-    session: Session, mode: Mode, start: datetime, end: datetime
-) -> list[tuple[datetime, datetime]]:
-    """Intervals within [start, end) when dispatch for ``mode`` was deliberately off:
-    persistent pause or another mode active (B7, B9)."""
-    rows = session.scalars(
-        select(RuntimeStateLog).order_by(RuntimeStateLog.at, RuntimeStateLog.id)
-    ).all()
-    intervals: list[tuple[datetime, datetime]] = []
-    for index, row in enumerate(rows):
-        seg_start = row.at
-        seg_end = rows[index + 1].at if index + 1 < len(rows) else end
-        lo, hi = max(seg_start, start), min(seg_end, end)
-        if lo >= hi:
-            continue
-        if row.dispatch_paused or row.active_mode != mode.value:
-            intervals.append((lo, hi))
-    # Time before the first log row is unknown and is never treated as deliberate.
-    return merge_intervals(intervals)
-
-
-def considerable_intervals(
-    session: Session, mode: Mode, start: datetime, end: datetime
-) -> list[tuple[datetime, datetime]]:
-    """Complement of the deliberate intervals within [start, end)."""
-    if start >= end:
-        return []
-    result: list[tuple[datetime, datetime]] = []
-    cursor = start
-    for lo, hi in deliberate_unavailable_intervals(session, mode, start, end):
-        if lo > cursor:
-            result.append((cursor, lo))
-        cursor = max(cursor, hi)
-    if cursor < end:
-        result.append((cursor, end))
-    return result
