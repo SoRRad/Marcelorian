@@ -90,7 +90,7 @@ def test_confirm_needs_a_source_then_moves_on(client, security, world) -> None:
         pos="0",
         tier="",
     )
-    assert response.headers["location"] == "/research/queue?pos=0"
+    assert response.headers["location"] == f"/research/queue?pos=0&near={fac}"
     page = client.get("/research/queue").text
     assert "1 of 4" in page and "C-FAC1</a></h2>" not in page  # heading is the next record
 
@@ -173,3 +173,79 @@ def test_tier_filter_and_end_of_queue(client, security) -> None:
     end = client.get("/research/queue", params={"tier": "3", "pos": "9"}).text
     assert "Nothing left to check in this tier" in end and "Back to the start" in end
     assert client.get("/research/queue", params={"pos": "x", "tier": "y"}).status_code == 200
+
+
+def test_after_a_finding_the_same_page_comes_next(client, security, world) -> None:
+    csrf = sign_in(client, security)
+    stage(
+        world,
+        [
+            *standard_rows(),
+            contact(
+                "C-SAMEPAGE",
+                primary_source_url="https://other-eye.test/faculty",
+                role_status="unverified",
+                email_status="publication_attribution_observed",
+            ),
+            contact(
+                "C-NEIGHBOUR",
+                primary_source_url="https://other-eye.test/faculty",
+                email_status="claim_only",
+                email="",
+                role_status="unverified",
+                verification_status="not_verified",
+            ),
+        ],
+    )
+    first = rid(world, "C-SAMEPAGE")
+    response = post(
+        client,
+        f"/research/{first}/quick",
+        csrf,
+        verification="not_faculty",
+        source="",
+        pos="0",
+        tier="",
+    )
+    page = client.get(response.headers["location"]).text
+    assert "Next from the same page as Dr Synthetic C-SAMEPAGE" in page
+    assert "C-NEIGHBOUR</a></h2>" in page  # tier 4, but on the page already open
+
+
+def test_keyboard_shortcuts_are_marked(client, security) -> None:
+    sign_in(client, security)
+    page = client.get("/research/queue").text
+    assert "data-shortcuts" in page
+    for key in ("1", "2", "3", "4", "5", "6", "s", "o"):
+        assert f'data-key="{key}"' in page
+    script = client.get("/static/app.js").text
+    assert "data-shortcuts" in script and "isContentEditable" in script
+
+
+def test_dashboard_shows_status_places_and_progress(client, security, world) -> None:
+    csrf = sign_in(client, security)
+    post(
+        client,
+        f"/research/{rid(world, 'C-FAC1')}/quick",
+        csrf,
+        verification="confirmed_current",
+        source=SOURCE,
+        pos="0",
+        tier="",
+    )
+    page = client.get("/").text
+    assert "Outreach status" in page and "Rejected (no opening)" in page
+    assert "Places in use" in page and "No place in use." in page
+    assert "Verification progress" in page and "Confirmed this week" in page
+    response = post(client, "/actions/same-place-scope", csrf, scope="lab")
+    assert "scope_error=confirm" in response.headers["location"]
+    response = post(client, "/actions/same-place-scope", csrf, scope="lab", confirm="yes")
+    assert response.headers["location"] == "/#places"
+    assert 'value="lab" selected' in client.get("/").text
+    assert post(client, "/actions/same-place-scope", csrf, scope="city").status_code == 400
+    assert (
+        client.post(
+            "/actions/same-place-scope", data={"scope": "institution"}, headers={"Origin": ORIGIN}
+        ).status_code
+        == 403
+    )

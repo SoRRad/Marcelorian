@@ -68,6 +68,9 @@ class AppSettings:
     year_end_start: str = "12-20"
     year_end_end: str = "01-05"
     hold_slot_14d_after_email4: bool = False
+    #: One active application per place (owner decision N1, 2026-10-19): ``institution``
+    #: (institution group), ``department`` (department within it) or ``lab``.
+    same_place_scope: str = "institution"
 
     def window_policy(self) -> WindowPolicy:
         return WindowPolicy(
@@ -102,6 +105,8 @@ _CAP_KEYS = (
     "real_submissions_per_24h",
     "sandbox_submissions_per_24h",
 )
+#: Same-place scopes, most conservative first (a narrower scope blocks less).
+SAME_PLACE_SCOPES = ("institution", "department", "lab")
 _FIELD_NAMES = {f.name for f in fields(AppSettings)}
 
 
@@ -156,6 +161,8 @@ def validate(settings: AppSettings) -> AppSettings:
     ):
         if not isinstance(getattr(settings, key), bool):
             raise SettingsError(f"{key} must be true or false")
+    if settings.same_place_scope not in SAME_PLACE_SCOPES:
+        raise SettingsError("same_place_scope must be institution, department or lab")
     signature = settings.email_signature
     if not isinstance(signature, str) or len(signature) > MAX_SIGNATURE_CHARS:
         raise SettingsError(f"email_signature must be text of at most {MAX_SIGNATURE_CHARS} chars")
@@ -224,6 +231,11 @@ def less_conservative_keys(new: AppSettings, old: AppSettings) -> list[str]:
         value = getattr(new, key)
         if value < getattr(DEFAULTS, key) and value < getattr(old, key):
             keys.append(key)
+    rank = SAME_PLACE_SCOPES.index
+    if rank(new.same_place_scope) > max(
+        rank(DEFAULTS.same_place_scope), rank(old.same_place_scope)
+    ):
+        keys.append("same_place_scope")
     new_policy, old_policy = new.window_policy(), old.window_policy()
     if _window_widened(new_policy, DEFAULTS.window_policy(), old_policy):
         if new_policy.weekdays != old_policy.weekdays:

@@ -112,6 +112,7 @@ def test_pacing_is_shared_by_real_modes_and_not_reset_by_switch(world) -> None:
 
 
 def test_sandbox_caps_enforced_and_isolated_from_live(world) -> None:
+    world.settings(same_place_scope="lab")  # the pending cap of 2, not the same-place rule
     inst = world.institution()
     for _ in range(2):
         world.draft_and_approve(world.campaign(world.pi(inst)))

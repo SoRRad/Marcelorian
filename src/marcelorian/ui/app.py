@@ -23,6 +23,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from marcelorian.clock import Clock
+from marcelorian.config.settings import (
+    ConfirmationRequired,
+    SettingsError,
+    load_settings,
+    update_settings,
+)
 from marcelorian.db.engine import transaction
 from marcelorian.db.models import Campaign, CampaignPause, Pi, ResearchRecord
 from marcelorian.domain.enums import Actor
@@ -38,11 +44,16 @@ from marcelorian.domain.research import (
     confidence,
     is_web_url,
 )
-from marcelorian.services import research_seed, runtime
+from marcelorian.services import research_seed, runtime, status
 from marcelorian.ui.security import SESSION_COOKIE, SecurityMiddleware, UISecurity, UISession
 
 SLOGAN = "May the Force Hire You"
 RESEARCH_PAGE_SIZE = 50
+SCOPE_LABELS = {
+    "institution": "Institution (or institution group)",
+    "department": "Department within an institution",
+    "lab": "Lab",
+}
 FILTER_FIELDS = (
     "record_type",
     "review_lane",
@@ -128,6 +139,11 @@ def create_app(
                 )
                 .order_by(CampaignPause.opened_at)
             ).all()
+            settings = load_settings(db)
+            outreach = status.outreach_status(
+                db, view.active_mode, settings.same_place_scope, clock.now()
+            )
+            research = research_seed.progress(db, clock.now().date())
         return templates.TemplateResponse(
             request,
             "dashboard.html",
@@ -137,6 +153,12 @@ def create_app(
                 "runtime": view,
                 "counts": counts,
                 "attention": attention,
+                "outreach": outreach,
+                "status_labels": status.STATUS_LABELS,
+                "research": research,
+                "scope": settings.same_place_scope,
+                "scope_labels": SCOPE_LABELS,
+                "scope_error": request.query_params.get("scope_error", ""),
             },
         )
 
@@ -144,6 +166,23 @@ def create_app(
         if on_dispatch_change is not None:
             on_dispatch_change()
         return RedirectResponse("/", status_code=303)
+
+    @app.post("/actions/same-place-scope")
+    def same_place_scope(scope: str = Form(...), confirm: str = Form("")) -> RedirectResponse:
+        with transaction(session_factory) as db:
+            try:
+                update_settings(
+                    db,
+                    {"same_place_scope": scope},
+                    actor=Actor.APPLICANT,
+                    now=clock.now(),
+                    confirm_less_conservative=confirm == "yes",
+                )
+            except ConfirmationRequired:
+                return RedirectResponse("/?scope_error=confirm#places", status_code=303)
+            except SettingsError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse("/#places", status_code=303)
 
     @app.post("/actions/pause")
     def pause(request: Request) -> RedirectResponse:
@@ -209,6 +248,12 @@ def create_app(
             wanted = _int_param(params.get("id"), None)
             if wanted is not None:
                 pos = next((i for i, it in enumerate(items) if it.record.id == wanted), pos)
+            near_name = ""
+            near = _int_param(params.get("near"), None)
+            if near is not None and wanted is None:
+                found = research_seed.same_page_next(db, items, near)
+                if found is not None:
+                    pos, near_name = found
             item = items[pos] if pos < len(items) else None
             context: dict[str, Any] = {
                 "slogan": SLOGAN,
@@ -225,6 +270,8 @@ def create_app(
                 "level_labels": LEVEL_LABELS,
                 "is_web_url": is_web_url,
                 "blocking": BLOCKING_VERIFICATIONS,
+                "near_name": near_name,
+                "progress": research_seed.progress(db, today),
             }
             if item is not None:
                 context["evidence"] = research_seed.evidence_for(db, item.record)
@@ -243,7 +290,7 @@ def create_app(
     ) -> RedirectResponse:
         if verification not in LOCAL_VERIFICATIONS or verification == "unchecked":
             raise HTTPException(status_code=400, detail="unknown finding")
-        back = _queue_url(pos=pos, tier=tier)
+        back = _queue_url(pos=pos, tier=tier, near=record_id)
         with transaction(session_factory) as db:
             try:
                 research_seed.quick_finding(
@@ -360,9 +407,16 @@ def _int_param(value: str | None, default: int | None) -> int | None:
 
 
 def _queue_url(
-    *, pos: int, tier: str, record_id: int | None = None, error: str | None = None
+    *,
+    pos: int,
+    tier: str,
+    record_id: int | None = None,
+    error: str | None = None,
+    near: int | None = None,
 ) -> str:
     query: dict[str, Any] = {"pos": max(0, pos)}
+    if near is not None:
+        query["near"] = near
     if tier.isdigit():
         query["tier"] = tier
     if record_id is not None:

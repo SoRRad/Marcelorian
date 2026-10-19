@@ -37,3 +37,14 @@ a.button { display: inline-block; border: 1px solid var(--accent); border-radius
 .quick-buttons form { display: inline; }
 button.primary { background: var(--accent); color: var(--bg); font-weight: 600; }
 form.inline { margin-top: 0.8rem; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.6rem; margin-bottom: 0.8rem; }
+.tile { border: 1px solid #30363d; border-radius: 6px; padding: 0.6rem 0.8rem; display: flex; flex-direction: column; }
+.tile-number { font-size: 1.6rem; font-weight: 600; color: var(--accent); }
+.tile-label { font-size: 0.85rem; color: var(--muted); }
+.status-table td.num { text-align: right; width: 4rem; }
+.scope { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; margin-top: 0.6rem; }
+.scope label { display: flex; flex-direction: column; font-size: 0.85rem; color: var(--muted); }
+.scope label.check { flex-direction: row; gap: 0.4rem; align-items: center; }
+kbd { font-family: inherit; font-size: 0.75rem; border: 1px solid var(--muted); border-radius: 3px; padding: 0 0.3rem; margin-right: 0.2rem; color: var(--muted); }
+button.primary kbd { color: var(--bg); border-color: var(--bg); }
+.near { color: var(--accent); }

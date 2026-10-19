@@ -533,6 +533,70 @@ def _queue_reason(record: ResearchRecord, facts: Facts) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class Progress:
+    """Verification progress for the dashboard."""
+
+    confirmed: int  # confirmations still valid
+    confirmed_this_week: int
+    expiring_soon: int  # valid, but expire within EXPIRY_WARNING_DAYS
+    expired: int
+    negative: int  # fellow, left, not faculty, retired, wrong person
+    to_check: int  # current queue length
+    total: int
+
+
+EXPIRY_WARNING_DAYS = 14
+
+
+def progress(session: Session, today: date) -> Progress:
+    confirmed = this_week = expiring = expired = negative = total = 0
+    for record in session.scalars(select(ResearchRecord)):
+        total += 1
+        if record.local_verification in BLOCKING_VERIFICATIONS:
+            negative += 1
+        if record.local_verification != "confirmed_current":
+            continue
+        verified_on = record.local_verified_at.date() if record.local_verified_at else None
+        if confirmation_expired(record.local_verification, verified_on, today):
+            expired += 1
+            continue
+        confirmed += 1
+        assert verified_on is not None
+        age = (today - verified_on).days
+        if age < 7:
+            this_week += 1
+        if age > CONFIRMATION_VALID_DAYS - EXPIRY_WARNING_DAYS:
+            expiring += 1
+    return Progress(
+        confirmed, this_week, expiring, expired, negative, len(queue(session, today)), total
+    )
+
+
+def same_page_next(
+    session: Session, items: list[QueueItem], record_id: int
+) -> tuple[int, str] | None:
+    """After a finding, the next queued record from the same source page, else the
+    same institution: that page is probably still open in the applicant's browser.
+
+    Returns (position in ``items``, name of the record just checked) or None.
+    """
+    done = session.get(ResearchRecord, record_id)
+    if done is None:
+        return None
+    label = done.name or done.external_record_id
+    page = done.primary_source_url.strip()
+    if page:
+        for index, item in enumerate(items):
+            if item.record.id != done.id and item.record.primary_source_url.strip() == page:
+                return index, label
+    if done.institution_key:
+        for index, item in enumerate(items):
+            if item.record.id != done.id and item.record.institution_key == done.institution_key:
+                return index, label
+    return None
+
+
 def queue_counts(items: list[QueueItem]) -> dict[int, int]:
     counts = dict.fromkeys(QUEUE_TIERS, 0)
     for item in items:

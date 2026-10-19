@@ -135,7 +135,6 @@ class OutlookCheck:
         self.factory: sessionmaker[Session]
         self.applicant_id = 0
         self.cv_id = 0
-        self.institution_id = 0
         self.r2_entry = 0
         self.s_entry = 0
         self.signature = ""
@@ -220,18 +219,6 @@ class OutlookCheck:
                 s, Mode.TRANSPORT_TEST, confirmed=True, actor=Actor.APPLICANT, now=now
             )
             runtime.resume_dispatch(s, actor=Actor.APPLICANT, now=now)
-            institution = Institution(
-                name="Synthetic Test University",
-                city="Testville",
-                state="MN",
-                iana_tz="America/Chicago",
-                tz_verified=True,
-                is_synthetic=True,
-                created_at=now,
-            )
-            s.add(institution)
-            s.flush()
-            self.institution_id = institution.id
 
     def _address(self, label: str) -> str:
         while True:
@@ -245,8 +232,21 @@ class OutlookCheck:
     def _campaign(self, letter: str, recipient_entry: int) -> int:
         now = self._now()
         with transaction(self.factory) as s:
+            # Each test campaign is its own place, so the same-place rule (one active
+            # application per institution) never holds campaign B behind campaign A.
+            institution = Institution(
+                name=f"Synthetic Test University {letter}",
+                city="Testville",
+                state="MN",
+                iana_tz="America/Chicago",
+                tz_verified=True,
+                is_synthetic=True,
+                created_at=now,
+            )
+            s.add(institution)
+            s.flush()
             lab = LabGroup(
-                institution_id=self.institution_id,
+                institution_id=institution.id,
                 name=f"Synthetic lab {letter}",
                 is_synthetic=True,
                 created_at=now,
@@ -258,7 +258,7 @@ class OutlookCheck:
                 last_name=f"Example{letter}",
                 salutation=f"Dr. Example{letter}",
                 salutation_reviewed=True,
-                institution_id=self.institution_id,
+                institution_id=institution.id,
                 lab_group_id=lab.id,
                 is_synthetic=True,
                 created_at=now,

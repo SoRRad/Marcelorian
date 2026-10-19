@@ -533,7 +533,6 @@ def approve(
     now: datetime,
     settings: AppSettings,
     specialty_display_name: str,
-    confirm_lab_conversation: bool = False,
 ) -> ApprovalOutcome:
     current = MessageState(message.state)
     if current not in (
@@ -647,7 +646,6 @@ def approve(
             settings,
             now,
             actor=actor,
-            confirm_lab_conversation=confirm_lab_conversation,
         )
 
     canonical = canonical_json(content)
