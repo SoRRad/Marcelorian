@@ -6,7 +6,50 @@
   {% if runtime.auth_blocked %}<span class="alert">Gmail needs reconnecting</span>{% endif %}
 </section>
 <section class="card">
-  <h2>Campaigns</h2>
+  <h2>Outreach status <span class="note">({{ runtime.active_mode.value }} mode)</span></h2>
+  <div class="tiles">
+    <div class="tile"><span class="tile-number">{{ outreach.contacted }}</span><span class="tile-label">Contacted</span></div>
+    <div class="tile"><span class="tile-number">{{ outreach.responded }}</span><span class="tile-label">Responses{% if outreach.response_rate is not none %} ({{ outreach.response_rate }}%){% endif %}</span></div>
+    <div class="tile"><span class="tile-number">{{ outreach.pending }}</span><span class="tile-label">Pending</span></div>
+    <div class="tile"><span class="tile-number">{{ outreach.counts.rejected }}</span><span class="tile-label">Rejected</span></div>
+  </div>
+  <table class="research status-table"><tbody>
+    {% for key, label in status_labels.items() %}<tr><td>{{ label }}</td><td class="num">{{ outreach.counts[key] }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% if not outreach.contacted %}<p class="note">No applications sent yet in this mode.</p>{% endif %}
+</section>
+
+<section class="card" id="places">
+  <h2>Places in use</h2>
+  <p class="note">One active application per place. A place frees after a rejection, a close, or 14 days after the last unanswered follow-up. A reply keeps it in use.</p>
+  <ul>
+    {% for p in outreach.places %}<li><strong>{{ p.place }}</strong> — {{ p.pi_name }}: {{ status_labels[p.state] }}{% if p.free_from %} (free from {{ p.free_from.strftime("%Y-%m-%d") }}){% endif %}</li>{% else %}<li>No place in use.</li>{% endfor %}
+  </ul>
+  <form method="post" action="/actions/same-place-scope" class="scope">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Count as one place:
+      <select name="scope">{% for value, label in scope_labels.items() %}<option value="{{ value }}" {% if scope == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+    </label>
+    <label class="check"><input type="checkbox" name="confirm" value="yes"> I understand a narrower setting allows more applications to one institution at once</label>
+    <button type="submit">Save</button>
+  </form>
+  {% if scope_error == 'confirm' %}<p class="alert">A narrower setting allows parallel applications to the same institution. Tick the box to confirm.</p>{% endif %}
+  <p class="note">Institution is the strictest setting. Group or split institutions (for example a separate VA hospital) to adjust what counts as one place.</p>
+</section>
+
+<section class="card">
+  <h2>Verification progress</h2>
+  <div class="tiles">
+    <div class="tile"><span class="tile-number">{{ research.confirmed }}</span><span class="tile-label">Confirmed (valid)</span></div>
+    <div class="tile"><span class="tile-number">{{ research.confirmed_this_week }}</span><span class="tile-label">Confirmed this week</span></div>
+    <div class="tile"><span class="tile-number">{{ research.expiring_soon }}</span><span class="tile-label">Expire within 14 days</span></div>
+    <div class="tile"><span class="tile-number">{{ research.to_check }}</span><span class="tile-label">Left to check</span></div>
+  </div>
+  <p class="note">{{ research.negative }} marked fellow, left, not faculty, retired or wrong person · {{ research.expired }} confirmations expired · {{ research.total }} research records. <a href="/research/queue">Open the verification queue</a></p>
+</section>
+
+<section class="card">
+  <h2>Campaigns by state</h2>
   <ul class="counts">
     {% for state, count in counts|dictsort %}<li>{{ state }}: {{ count }}</li>{% else %}<li>No campaigns yet.</li>{% endfor %}
   </ul>

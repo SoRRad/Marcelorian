@@ -11,6 +11,14 @@ assignment, so merged groups never double-count):
   slightly future-dated established time still counts) plus active
   (projected, i.e. approved-but-unsent, in-flight or uncertain) ones.
 
+Same-place rule (owner decisions N1-N2, 2026-10-19): one active application per place,
+where a place is the institution group (default), a department within it, or a lab
+(``same_place_scope``). Another campaign occupies the place while it is pending,
+paused for review or in a conversation, and for 14 days after its last unanswered
+follow-up; closing it (a "no opening" reply, a bounce, do-not-contact or the
+applicant's own close) frees the place. Checked at Email 1 approval and again at the
+final dispatch check; follow-ups of a campaign already under way are never blocked.
+
 A campaign that already owns reservations is *validated*, never reserved twice
 (B4). Capacity is evaluated "including self": a campaign occupying the last
 allowed slot can send (spec §11), while lowered limits block initials that are
@@ -29,7 +37,14 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from marcelorian.config.settings import AppSettings
-from marcelorian.db.models import Campaign, Institution, LabSuggestion, Pi, Reservation
+from marcelorian.db.models import (
+    Campaign,
+    Institution,
+    LabSuggestion,
+    Message,
+    Pi,
+    Reservation,
+)
 from marcelorian.domain.enums import (
     Actor,
     CampaignState,
@@ -41,16 +56,19 @@ from marcelorian.services.audit import audit
 
 NEW_CONTACT_WINDOW = timedelta(days=30)
 SLOT_HOLD_AFTER_EMAIL4 = timedelta(days=14)
+#: A finished sequence with no reply keeps its place this long after the last email.
+SAME_PLACE_NO_REPLY_GRACE = timedelta(days=14)
+_OCCUPYING_STATES = (
+    CampaignState.OUTREACH_PENDING.value,
+    CampaignState.PAUSED_REVIEW.value,
+    CampaignState.CONVERSATION.value,
+)
 
 
 class CapacityError(RuntimeError):
     def __init__(self, result: CapacityResult) -> None:
         super().__init__("capacity check failed: " + ", ".join(result.reasons))
         self.result = result
-
-
-class LabConversationConfirmationRequired(RuntimeError):
-    """Another PI in this lab group is in a conversation; the applicant must confirm (§11)."""
 
 
 @dataclass(frozen=True)
@@ -160,6 +178,64 @@ def active_reservations(session: Session, campaign_id: int) -> dict[ReservationK
     return {ReservationKind(r.kind): r for r in rows}
 
 
+def _department(value: str | None) -> str:
+    return " ".join((value or "").split()).casefold()
+
+
+def occupies_place(session: Session, campaign: Campaign, now: datetime) -> bool:
+    """Whether this campaign holds its place under the same-place rule."""
+    if campaign.state in _OCCUPYING_STATES:
+        return True
+    if campaign.state != CampaignState.SEQUENCE_COMPLETE.value:
+        return False
+    return place_free_from(session, campaign) > now
+
+
+def place_free_from(session: Session, campaign: Campaign) -> datetime:
+    """For a finished sequence: when its place frees (14 days after the last email)."""
+    last = session.scalar(
+        select(func.max(Message.sent_at)).where(Message.campaign_id == campaign.id)
+    )
+    return (last or campaign.updated_at) + SAME_PLACE_NO_REPLY_GRACE
+
+
+def same_place_conflicts(
+    session: Session, campaign: Campaign, scope: str, now: datetime
+) -> list[Campaign]:
+    """Other campaigns (same mode) occupying this campaign's place.
+
+    A missing department is treated as the whole institution (conservative): it
+    conflicts with every department there, and a PI without one conflicts with all.
+    """
+    pi = session.get(Pi, campaign.pi_id)
+    assert pi is not None
+    stmt = (
+        select(Campaign, Pi)
+        .join(Pi, Pi.id == Campaign.pi_id)
+        .where(
+            Campaign.mode == campaign.mode,
+            Campaign.id != campaign.id,
+            Campaign.state.in_((*_OCCUPYING_STATES, CampaignState.SEQUENCE_COMPLETE.value)),
+        )
+    )
+    if scope == "lab":
+        stmt = stmt.where(Pi.lab_group_id == pi.lab_group_id)
+    else:
+        stmt = stmt.where(
+            Pi.institution_id.in_(institution_ids_in_group(session, pi.institution_id))
+        )
+    own_department = _department(pi.department)
+    found: list[Campaign] = []
+    for other, other_pi in session.execute(stmt).all():
+        if scope == "department" and own_department:
+            theirs = _department(other_pi.department)
+            if theirs and theirs != own_department:
+                continue
+        if occupies_place(session, other, now):
+            found.append(other)
+    return found
+
+
 def evaluate_initial(
     session: Session, campaign: Campaign, settings: AppSettings, now: datetime
 ) -> CapacityResult:
@@ -178,6 +254,9 @@ def evaluate_initial(
         reasons.append("lab_pending_full")
     if contacts > settings.new_contacts_per_institution_30d:
         reasons.append("new_contacts_30d_full")
+    busy = same_place_conflicts(session, campaign, settings.same_place_scope, now)
+    if busy:
+        reasons.append("same_place_active")
     return CapacityResult(
         ok=not reasons,
         reasons=tuple(reasons),
@@ -185,6 +264,7 @@ def evaluate_initial(
             "institution_pending": pending_inst,
             "lab_pending": pending_lab,
             "new_contacts_30d": contacts,
+            "same_place_active": len(busy),
         },
     )
 
@@ -210,24 +290,6 @@ def _lab_suggestion_block(session: Session, campaign: Campaign) -> bool:
     return False
 
 
-def _lab_conversation_exists(session: Session, campaign: Campaign) -> bool:
-    pi = session.get(Pi, campaign.pi_id)
-    assert pi is not None
-    return bool(
-        session.scalar(
-            select(func.count())
-            .select_from(Campaign)
-            .join(Pi, Pi.id == Campaign.pi_id)
-            .where(
-                Campaign.mode == campaign.mode,
-                Campaign.id != campaign.id,
-                Pi.lab_group_id == pi.lab_group_id,
-                Campaign.state == CampaignState.CONVERSATION.value,
-            )
-        )
-    )
-
-
 def reserve_or_validate_initial(
     session: Session,
     campaign: Campaign,
@@ -235,15 +297,10 @@ def reserve_or_validate_initial(
     now: datetime,
     *,
     actor: Actor,
-    confirm_lab_conversation: bool = False,
 ) -> CapacityResult:
     """At Email 1 approval: reserve atomically, or validate reservations already owned (B4)."""
     if _lab_suggestion_block(session, campaign):
         raise CapacityError(CapacityResult(ok=False, reasons=("lab_suggestion_unreviewed",)))
-    if _lab_conversation_exists(session, campaign) and not confirm_lab_conversation:
-        raise LabConversationConfirmationRequired(
-            "another PI in this lab group is in a conversation; confirm to continue"
-        )
     existing = active_reservations(session, campaign.id)
     result = evaluate_initial(session, campaign, settings, now)
     if existing:

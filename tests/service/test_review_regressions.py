@@ -105,6 +105,7 @@ def test_rediscovered_record_with_contacted_address_gets_no_second_email1(live) 
 
 
 def test_merge_after_approval_blocks_both_initials_until_resolved(live) -> None:
+    live.settings(same_place_scope="lab")  # two approvals at one institution first
     inst = live.institution()
     pi_a = live.pi(inst, email="a.example@synthetic-univ.test")
     pi_b = live.pi(inst, email="alex.example@synthetic-univ.test")

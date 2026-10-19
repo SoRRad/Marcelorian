@@ -4,6 +4,7 @@
 <section class="card">
   <h2>Verification queue</h2>
   <p class="note">Most sendable first. Open the official source, check the person is current faculty or an investigator there (not a fellow, resident, or someone who has left), then record what you found. Nothing here drafts or sends anything.</p>
+  <p class="note">Confirmed (valid): {{ progress.confirmed }} · this week: {{ progress.confirmed_this_week }} · expiring within 14 days: {{ progress.expiring_soon }}</p>
   <p class="tiers">
     <a href="/research/queue" {% if tier is none %}class="current"{% endif %}>All ({{ counts.values()|sum }})</a>
     {% for number, label in tiers.items() %}<a href="/research/queue?tier={{ number }}" {% if tier == number %}class="current"{% endif %}>{{ number }}. {{ label }} ({{ counts[number] }})</a>{% endfor %}
@@ -11,6 +12,8 @@
 </section>
 {% if item %}
 {% set record = item.record %}
+<div data-shortcuts>
+{% if near_name %}<p class="note near">Next from the same page as {{ near_name }}.</p>{% endif %}
 <section class="card">
   <p class="note">{{ pos + 1 }} of {{ total }} · Tier {{ item.tier }}: {{ tiers[item.tier] }}</p>
   <p class="queue-reason">{{ item.reason }}</p>
@@ -27,7 +30,7 @@
 <section class="card">
   <h2>Where to check</h2>
   <ul>
-    {% if is_web_url(record.primary_source_url) %}<li><a href="{{ record.primary_source_url }}" target="_blank" rel="noopener noreferrer">Primary source</a></li>{% endif %}
+    {% if is_web_url(record.primary_source_url) %}<li><a href="{{ record.primary_source_url }}" target="_blank" rel="noopener noreferrer" data-key="o">Primary source</a> <kbd>O</kbd></li>{% endif %}
     {% if is_web_url(record.email_source_url) and record.email_source_url != record.primary_source_url %}<li><a href="{{ record.email_source_url }}" target="_blank" rel="noopener noreferrer">Email source</a></li>{% endif %}
     {% for url in source_urls %}{% if is_web_url(url) and url not in (record.primary_source_url, record.email_source_url) %}<li><a href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ url }}</a></li>{% endif %}{% endfor %}
     {% if not (is_web_url(record.primary_source_url) or source_urls) %}<li>No source link in the seed: search the institution's department faculty page.</li>{% endif %}
@@ -46,9 +49,9 @@
     <label>Where you checked (URL or note; required to confirm) <input type="text" name="source" maxlength="2000" value="{{ record.local_verification_source or '' }}"></label>
     <label>Note (optional) <input type="text" name="note" maxlength="2000"></label>
     <div class="quick-buttons">
-      <button type="submit" name="verification" value="confirmed_current" class="primary">Confirmed current</button>
+      <button type="submit" name="verification" value="confirmed_current" class="primary" data-key="1"><kbd>1</kbd> Confirmed current</button>
       {% for value in ('fellow_or_trainee', 'left_institution', 'not_faculty', 'retired_or_emeritus', 'wrong_person') %}
-      <button type="submit" name="verification" value="{{ value }}">{% if record.local_verification == value %}Keep: {% endif %}{{ verifications[value].split(': ', 1)[-1]|capitalize }}</button>
+      <button type="submit" name="verification" value="{{ value }}" data-key="{{ loop.index + 1 }}"><kbd>{{ loop.index + 1 }}</kbd> {% if record.local_verification == value %}Keep: {% endif %}{{ verifications[value].split(': ', 1)[-1]|capitalize }}</button>
       {% endfor %}
     </div>
   </form>
@@ -58,13 +61,15 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="back" value="queue"><input type="hidden" name="pos" value="{{ pos }}">
       <input type="hidden" name="tier" value="{{ tier if tier is not none else '' }}">
-      <button type="submit">Reopen (back to not checked)</button>
+      <button type="submit" data-key="r"><kbd>R</kbd> Reopen (back to not checked)</button>
     </form>
     {% endif %}
-    {% if pos + 1 < total %}<a class="button" href="/research/queue?pos={{ pos + 1 }}{% if tier is not none %}&amp;tier={{ tier }}{% endif %}">Skip for now &rarr;</a>{% endif %}
-    {% if pos > 0 %}<a class="button" href="/research/queue?pos={{ pos - 1 }}{% if tier is not none %}&amp;tier={{ tier }}{% endif %}">&larr; Previous</a>{% endif %}
+    {% if pos + 1 < total %}<a class="button" data-key="s" href="/research/queue?pos={{ pos + 1 }}{% if tier is not none %}&amp;tier={{ tier }}{% endif %}"><kbd>S</kbd> Skip for now &rarr;</a>{% endif %}
+    {% if pos > 0 %}<a class="button" data-key="p" href="/research/queue?pos={{ pos - 1 }}{% if tier is not none %}&amp;tier={{ tier }}{% endif %}"><kbd>P</kbd> &larr; Previous</a>{% endif %}
   </div>
+  <p class="note">Keyboard: 1–6 record a finding, S skip, P previous, O open the primary source{% if record.local_verification in blocking %}, R reopen{% endif %}. Shortcuts pause while you type in a box.</p>
 </section>
+</div>
 {% else %}
 <section class="card"><p>Nothing left to check{% if tier is not none %} in this tier{% endif %}. {% if total and pos >= total %}<a href="/research/queue{% if tier is not none %}?tier={{ tier }}{% endif %}">Back to the start</a> to see records you skipped.{% endif %}</p></section>
 {% endif %}

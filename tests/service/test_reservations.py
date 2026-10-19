@@ -22,9 +22,18 @@ from marcelorian.services import approvals, campaigns, reservations
 from marcelorian.services.approvals import ApprovalError
 from marcelorian.services.gateway import Outcome
 from marcelorian.services.inbound import record_inbound
-from marcelorian.services.reservations import CapacityError, LabConversationConfirmationRequired
+from marcelorian.services.reservations import CapacityError
 
 WEEK = timedelta(days=7)
+
+
+@pytest.fixture(autouse=True)
+def _lab_scope(world) -> None:
+    """These tests exercise the per-institution caps with several PIs at one
+    institution at once; the same-place rule (one active application per
+    institution) is narrowed to labs so those caps stay reachable. The rule itself
+    is tested in tests/service/test_same_place.py."""
+    world.settings(same_place_scope="lab")
 
 
 def active(world, campaign_id):
@@ -235,7 +244,9 @@ def test_unverified_lab_suggestion_blocks_second_contact_until_reviewed(world) -
     world.approve(mid)
 
 
-def test_lab_conversation_requires_confirmation(world) -> None:
+def test_lab_conversation_blocks_a_second_contact_in_the_lab(world) -> None:
+    # Owner decision (2026-10-19): a lab in a conversation is an occupied place; the
+    # former confirm-to-continue warning (spec §11) is superseded by a hard block.
     inst = world.institution()
     pi_a = world.pi(inst)
     pi_b = world.pi(inst, lab_group_id=world.lab_group_of(pi_a))
@@ -246,9 +257,9 @@ def test_lab_conversation_requires_confirmation(world) -> None:
     assert world.campaign_row(camp_a).state == CampaignState.CONVERSATION.value
     camp_b = world.campaign(pi_b)
     mid_b = world.draft(camp_b)
-    with pytest.raises(LabConversationConfirmationRequired):
+    with pytest.raises(CapacityError) as info:
         world.approve(mid_b)
-    world.approve(mid_b, confirm_lab_conversation=True)
+    assert "same_place_active" in info.value.result.reasons
 
 
 def test_lab_cap_of_one(world) -> None:

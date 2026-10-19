@@ -153,6 +153,8 @@ class Pi(Base):
     lab_group_id: Mapped[int] = mapped_column(ForeignKey("lab_group.id"))
     current_role_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     current_role_evidence: Mapped[str | None] = mapped_column(Text)
+    #: Department or setting within the institution (same-place rule, department scope).
+    department: Mapped[str | None] = mapped_column(String(255))
     merged_into_id: Mapped[int | None] = mapped_column(ForeignKey("pi.id"))
     is_synthetic: Mapped[bool] = mapped_column(Boolean, default=False)
     version: Mapped[int] = mapped_column(Integer, default=1)

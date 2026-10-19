@@ -500,7 +500,7 @@ All counts are per mode, except the real-submission budget and pacing ledger, wh
   - Any increase above a default needs explicit warning/confirmation and is audited.
   - Pacing stays positive (default 2–6 minutes, minimum ≤ maximum).
   - No setting can disable approval, recipient validation, uncertainty handling, or reply checking. Debug settings are impossible in live mode.
-- **Lab conversation warning:** before reserving a slot for a PI in a lab group with a `conversation`, show its status; the applicant must confirm.
+- **Same-place rule (owner decisions N1–N2, 2026-10-19):** one active application per place, so the applicant never applies to the same place from two directions at once. A place is the institution group (default), a department within it, or a lab (`same_place_scope`; a narrower scope needs confirmation, B16). A missing department counts as the whole institution. Another campaign occupies the place while `outreach_pending`, `paused_review` or `conversation`, and as `sequence_complete` until 14 days after its last email; any `closed` outcome (a "no opening" rejection, a bounce, do-not-contact, the applicant's own close) frees it. Checked at Email 1 approval and at the final dispatch check; follow-ups are never blocked. This supersedes the former lab-conversation warning: a lab (or wider place) in a conversation now blocks a second contact.
 - **Optional stricter setting (off by default):** hold the slot 14 days after Email 4's established `sent_at`. A genuine reply or any `closed` outcome during the hold releases it at once; otherwise it lapses exactly 14 days later. Consumed 30-day contact history is never affected.
 - Caps apply to this applicant's local records only.
 
@@ -591,6 +591,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
    9. Auto-start consent
    10. Mode = **sandbox** by default
 2. **Dashboard:**
+   - Outreach status (owner decision N3): contacted, responses and response rate, pending, rejected, no reply after all follow-ups, approved-not-sent, needs attention; places in use with the same-place scope switch; verification progress (confirmed, this week, expiring within 14 days, left to check).
    - Counts by state; next dispatches.
    - Attention items: reconnect, sync gap, uncertain sends, paused reviews, needs re-approval, over capacity.
    - `last_gmail_coverage_at`, export/Sheet freshness.
@@ -656,7 +657,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 - **P2 — Drafting, review, and rules.** Templates, LLM fill + validation, the approval queue, and drafting/review integration on top of the P0 scheduling/caps/reservation/state logic (extended with tests as needed). Sandbox mode end to end. Reuse the P0 gateway; no temporary sender.
 - **P3 — Automation.** Tray worker, dispatcher priorities, wiring the P0 window/pacing/missed-window rules into tray automation, restart/sleep/resume recovery, history sync with gap recovery, inbound classification, the reviews and tasks screens, toasts.
 - **P4 — Records and report.** CSVs (atomic, formula-safe, lock-tolerant), consented Sheet with Viewer sharing and revocation, dashboard freshness, cost estimate, backups/restore, delete-all-data.
-- **P5 — Packaging and docs.** Installer, auto-start, CI release with checksum, both guides.
+- **P5 — Packaging and docs.** Installer, auto-start, CI release with checksum, both guides. Owner preference (N5, 2026-10-19): package only when everything is ready, as a no-install Windows zip downloaded from a GitHub release link (code only, never the seed), with a short, non-technical, step-by-step tester walkthrough.
 - **P6 — Acceptance.** All automated tests (§19), plus a separately reported, explicitly authorized live checklist on Windows 11.
 
 ---

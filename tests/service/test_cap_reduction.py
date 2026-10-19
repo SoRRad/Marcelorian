@@ -18,6 +18,15 @@ from marcelorian.services.reservations import CapacityError
 WEEK = timedelta(hours=168)
 
 
+@pytest.fixture(autouse=True)
+def _lab_scope(world) -> None:
+    """These tests exercise the per-institution caps with several PIs at one
+    institution at once; the same-place rule (one active application per
+    institution) is narrowed to labs so those caps stay reachable. The rule itself
+    is tested in tests/service/test_same_place.py."""
+    world.settings(same_place_scope="lab")
+
+
 def cancel(world, camp):
     with transaction(world.factory) as s:
         approvals.cancel_initial(

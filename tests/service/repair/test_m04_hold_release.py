@@ -152,6 +152,9 @@ def test_genuine_reply_during_hold_releases_pending_slot(world) -> None:
 
 
 def test_genuine_reply_during_hold_lets_next_initial_reserve(world) -> None:
+    # Pending-slot release under test; a reply keeps an institution occupied under
+    # the same-place rule, so that rule is narrowed to labs here.
+    world.settings(same_place_scope="lab")
     inst = world.institution()
     camp, _, _ = _complete_with_hold(world, inst)
     world.clock.advance(timedelta(days=1))

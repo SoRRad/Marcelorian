@@ -151,6 +151,16 @@ extend it; the queue's "Confirmed current" button is an explicit re-confirmation
 Migration `0004` adds `research_record.local_verified_at` (when the current finding
 was made). Existing findings take the time they were last saved.
 
+### Working faster (owner decision N4)
+
+* **Keyboard:** 1 Confirmed current, 2 Fellow or trainee, 3 Left, 4 Not faculty,
+  5 Retired or emeritus, 6 Wrong person, S skip, P previous, O open the primary source,
+  R reopen. Shortcuts pause while you type in a box.
+* **Same page next:** after any finding, the queue shows the next record from the same
+  source page (else the same institution), since that page is probably still open.
+* **Progress:** the queue and the dashboard show confirmed (valid), confirmed this week,
+  expiring within 14 days, expired, negative findings and left to check.
+
 ## Semantics carried over
 
 * Contacts and opportunities are separate record types. A program, shared mailbox or
