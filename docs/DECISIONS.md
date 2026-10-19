@@ -487,3 +487,36 @@ owner's written description of each finding.
     prior contact and others) are resolved per reason; a bounce closes the
     campaign and marks the address invalid. The dashboard lists emails open in
     Outlook (flagged after a day) and due tasks.
+45. **Settings, mode switch and practice time (P2).** Settings shows the live
+    readiness checklist (confirmed profile, CV, signature step, Outlook address,
+    plus two owner attestations: the real Outlook test passed and the limits
+    were reviewed); live mode is refused until it is complete, and every switch
+    pauses sending unless the applicant ticks "resume". Practice time is a
+    forward-only offset (+1 hour/day/week) stored in the database, applied only
+    while practice mode is active, and used by campaign, message, send and reply
+    screens; profile and research always use real time. Body templates are
+    edited here (empty restores the default).
+46. **Optional Claude suggestions (P2, U2).** Off until the applicant saves an
+    Anthropic API key in Settings. The key is stored only in the OS credential
+    store (Windows Credential Manager); the database keeps a "key saved" flag so
+    no page load touches the store. Saving checks the key with a model lookup
+    (no text, no credit). "Suggest empty lines with Claude" sends one request
+    (official SDK, model `claude-opus-5-5`, structured JSON output, effort
+    medium) for the empty personal lines only, outside any database
+    transaction. Sent: the PI's name and public publication titles/venues/dates,
+    and the applicant's role, degrees, research and subspecialty interests,
+    skills and tone. Never sent: name, visa or training status, contact details,
+    CV or email text. Each line must cite evidence ids (lines about the PI's
+    work) or confirmed fact ids (lines about the applicant); the app rechecks the
+    citations against fresh data (evidence belongs to this PI, facts confirmed
+    at the same version) and refuses braces, links, addresses, practice text,
+    over-long lines and relationship or promise claims. Failing lines are left
+    empty with a plain reason. Kept lines are saved as a draft (source "ai") and
+    shown with their evidence on the draft and review pages; a line the
+    applicant changes becomes theirs (C4) and loses its AI basis. Refusal
+    fallback is on (`fallbacks="default"`, beta `server-side-fallback-2026-07-01`);
+    if the whole chain declines, the applicant writes the lines. Token usage is
+    audited (never the text) and Settings shows an estimated cost at $4/$20 per
+    million input/output tokens. Practice mode keeps its canned text; the
+    Claude button also appears there when a key is saved, so testers can try
+    it knowingly (it spends their credit). Tests use fake clients only.

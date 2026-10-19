@@ -71,7 +71,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
     ) -> RedirectResponse:
         url = f"/messages/{message_id}"
         with transaction(ui.session_factory) as db:
-            now = ui.clock.now()
+            now = ui.campaign_clock.now()
             message = db.get(Message, message_id)
             if message is None:
                 raise HTTPException(status_code=404)
@@ -140,7 +140,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
                     edited=edited == "yes",
                     settings=load_settings(db),
                     actor=Actor.APPLICANT,
-                    now=ui.clock.now(),
+                    now=ui.campaign_clock.now(),
                 )
             except (handoff.HandoffError, ValueError) as exc:
                 return _redirect(f"/handoffs/{attempt_uid}", error=str(exc))
@@ -156,7 +156,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
                     attempt_uid,
                     note=note[:500] or None,
                     actor=Actor.APPLICANT,
-                    now=ui.clock.now(),
+                    now=ui.campaign_clock.now(),
                 )
             except (handoff.HandoffError, ValueError) as exc:
                 return _redirect(f"/handoffs/{attempt_uid}", error=str(exc))
@@ -195,7 +195,12 @@ def register(app: FastAPI, ui: UIContext) -> None:
             campaign = _campaign(db, campaign_id)
             try:
                 replies.record_reply(
-                    db, campaign, tag, note=note, contact_later_on=later_on, now=ui.clock.now()
+                    db,
+                    campaign,
+                    tag,
+                    note=note,
+                    contact_later_on=later_on,
+                    now=ui.campaign_clock.now(),
                 )
             except (replies.ReplyError, handoff.HandoffError) as exc:
                 return _redirect(url, error=str(exc))
@@ -207,7 +212,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
         with transaction(ui.session_factory) as db:
             campaign = _campaign(db, campaign_id)
             try:
-                replies.simulate(db, campaign, kind, now=ui.clock.now())
+                replies.simulate(db, campaign, kind, now=ui.campaign_clock.now())
             except replies.ReplyError as exc:
                 return _redirect(url, error=str(exc))
         return _redirect(url, notice=f"simulated_{kind}")
@@ -218,7 +223,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
         with transaction(ui.session_factory) as db:
             campaign = _campaign(db, campaign_id)
             try:
-                replies.close(db, campaign, reason, now=ui.clock.now())
+                replies.close(db, campaign, reason, now=ui.campaign_clock.now())
             except replies.ReplyError as exc:
                 return _redirect(url, error=str(exc))
         return _redirect(url, notice="closed")
@@ -230,7 +235,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
             campaign = _campaign(db, campaign_id)
             try:
                 handoff.report_prior_contact(
-                    db, campaign, note=note, actor=Actor.APPLICANT, now=ui.clock.now()
+                    db, campaign, note=note, actor=Actor.APPLICANT, now=ui.campaign_clock.now()
                 )
             except handoff.HandoffError as exc:
                 return _redirect(url, error=str(exc))
@@ -248,7 +253,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
                     db,
                     pause_id,
                     action,
-                    now=ui.clock.now(),
+                    now=ui.campaign_clock.now(),
                     mailbox_email=mailbox.email if mailbox else None,
                 )
             except (replies.ReplyError, ValueError) as exc:
@@ -269,7 +274,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
     def task_done(task_id: int) -> RedirectResponse:
         with transaction(ui.session_factory) as db:
             try:
-                replies.complete_task(db, task_id, now=ui.clock.now())
+                replies.complete_task(db, task_id, now=ui.campaign_clock.now())
             except LookupError as exc:
                 raise HTTPException(status_code=404) from exc
         return RedirectResponse("/tasks", status_code=303)

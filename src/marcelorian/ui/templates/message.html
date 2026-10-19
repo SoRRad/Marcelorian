@@ -9,8 +9,21 @@
   <p>Subject: <strong>{{ message.draft_subject }}</strong></p>
   <pre class="email-preview">{{ message.draft_body }}</pre>
   {% if fields.get("body_edited") %}<p class="note">You edited the whole text.</p>{% endif %}
-  {% for key, source in (fields.get("sources") or {}).items() %}{% if source != "applicant" %}<span class="badge warn">{{ key }}: {{ source }}</span> {% endif %}{% endfor %}
+  {% for key, source in (fields.get("sources") or {}).items() %}{% if source != "applicant" %}<span class="badge warn">{{ key }}: {{ "suggested by Claude" if source == "ai" else source }}</span> {% endif %}{% endfor %}
 </section>
+
+{% if cited and reviewable %}
+<section class="card">
+  <h2>Claude's lines and their evidence</h2>
+  <p class="note">Read each line beside what it is based on. If a line says more than its evidence, edit the draft.</p>
+  <table class="claims"><thead><tr><th>Line</th><th>Based on</th></tr></thead><tbody>
+  {% for key, item in cited.items() %}<tr><td><strong>{{ item.label }}</strong><br>{{ item.text }}</td><td><ul>
+    {% for e in item.evidence %}<li>{% if is_web_url(e.url) %}<a href="{{ e.url }}" target="_blank" rel="noopener noreferrer">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %}{% if e.venue %} · {{ e.venue }}{% endif %}{% if e.published_on %} · {{ e.published_on }}{% endif %}</li>{% endfor %}
+    {% for label, value in item.facts %}<li>Your answer “{{ label }}”: {{ value }}</li>{% endfor %}
+  </ul></td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
 
 {% if reviewable %}
 <section class="card">

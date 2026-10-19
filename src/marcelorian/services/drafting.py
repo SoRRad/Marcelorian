@@ -288,8 +288,13 @@ def save(
     body_override: str | None,
     specialty_display_name: str,
     now: datetime,
+    ai_basis: dict[str, dict[str, Any]] | None = None,
 ) -> Message:
-    """Render, then save through ``approvals.save_draft`` (which handles versions, B18)."""
+    """Render, then save through ``approvals.save_draft`` (which handles versions, B18).
+
+    ``ai_basis`` keeps, per Claude-suggested line, the text and the evidence and facts it
+    cites; a line whose saved text differs from the suggestion is the applicant's (C4).
+    """
     clean = {
         k: " ".join(v.split())[:MAX_FIELD] for k, v in personal.items() if k in PERSONAL_FIELDS
     }
@@ -319,15 +324,51 @@ def save(
         actor=Actor.APPLICANT,
         now=now,
     )
+    final_sources = {k: sources.get(k, "applicant") for k in clean}
+    kept_basis: dict[str, dict[str, Any]] = {}
+    for key, source in final_sources.items():
+        item = (ai_basis or {}).get(key)
+        if source == "ai" and item is not None and item.get("text") == clean[key]:
+            kept_basis[key] = item
+        elif source == "ai":
+            final_sources[key] = "applicant"
     message.draft_fields_json = json.dumps(
         {
             "personal": clean,
-            "sources": {k: sources.get(k, "applicant") for k in clean},
+            "sources": final_sources,
+            "ai": kept_basis,
             "body_edited": edited,
         },
         sort_keys=True,
     )
     return message
+
+
+def carry_forward(
+    previous: Message | None, personal: dict[str, str]
+) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    """Sources for a re-save: unchanged suggested or practice lines keep their source.
+
+    Any line the applicant changed (or wrote) is theirs (C4), and its AI basis is dropped.
+    """
+    fields = draft_fields(previous) if previous is not None else {}
+
+    def section(name: str) -> dict[str, Any]:
+        value = fields.get(name)
+        return value if isinstance(value, dict) else {}
+
+    old_personal, old_sources, old_basis = section("personal"), section("sources"), section("ai")
+    sources: dict[str, str] = {}
+    kept: dict[str, dict[str, Any]] = {}
+    for key, text in personal.items():
+        same = " ".join(text.split()) == old_personal.get(key)
+        source = old_sources.get(key, "applicant") if same and text.strip() else "applicant"
+        sources[key] = source if source in ("ai", "practice") else "applicant"
+        if sources[key] == "ai" and isinstance(old_basis.get(key), dict):
+            kept[key] = old_basis[key]
+        elif sources[key] == "ai":
+            sources[key] = "applicant"
+    return sources, kept
 
 
 def draft_fields(message: Message) -> dict[str, Any]:

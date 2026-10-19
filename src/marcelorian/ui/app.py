@@ -22,7 +22,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from marcelorian.clock import Clock
+from marcelorian.clock import Clock, PracticeClock
 from marcelorian.config.settings import (
     ConfirmationRequired,
     SettingsError,
@@ -46,19 +46,28 @@ from marcelorian.domain.research import (
     is_web_url,
 )
 from marcelorian.lookups.http import Fetcher, HttpFetcher
+from marcelorian.platform.secrets import SecretStore, open_secret_store
 from marcelorian.services import (
     approvals,
     handoff,
+    practice,
     profile,
     replies,
     research_seed,
     runtime,
     status,
 )
+from marcelorian.services.ai import AnthropicClient, ClientFactory
 from marcelorian.services.gateway import SendGateway
 from marcelorian.services.sync import SandboxSync
 from marcelorian.transport.sandbox import SandboxTransport
-from marcelorian.ui import routes_contacts, routes_messages, routes_profile, routes_send
+from marcelorian.ui import (
+    routes_contacts,
+    routes_messages,
+    routes_profile,
+    routes_send,
+    routes_settings,
+)
 from marcelorian.ui.context import SLOGAN, UIContext
 from marcelorian.ui.security import SESSION_COOKIE, SecurityMiddleware, UISecurity, UISession
 
@@ -86,6 +95,7 @@ def _templates() -> Jinja2Templates:
     directory = str(resources.files("marcelorian.ui").joinpath("templates"))
     templates = Jinja2Templates(directory=directory)
     templates.env.autoescape = True  # escape all untrusted text
+    templates.env.globals["is_web_url"] = is_web_url  # only http(s) links become anchors
     return templates
 
 
@@ -95,6 +105,8 @@ def create_app(
     clock: Clock,
     on_dispatch_change: Callable[[], None] | None = None,
     fetcher: Fetcher | None = None,
+    secrets: Callable[[], SecretStore] | None = None,
+    ai_client: ClientFactory | None = None,
 ) -> Any:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     templates = _templates()
@@ -105,20 +117,35 @@ def create_app(
         session: UISession = request.scope["state"]["ui_session"]
         return session
 
+    with transaction(session_factory) as db:
+        practice_clock = PracticeClock(
+            clock,
+            practice.load_offset(db),
+            active=runtime.get_runtime(db, clock.now()).active_mode is Mode.SANDBOX,
+        )
     gateway = SendGateway(
         session_factory=session_factory,
-        clock=clock,
-        transports={Mode.SANDBOX: SandboxTransport(clock)},
-        syncs={"sandbox": SandboxSync(session_factory, clock)},
+        clock=practice_clock,
+        transports={Mode.SANDBOX: SandboxTransport(practice_clock)},
+        syncs={"sandbox": SandboxSync(session_factory, practice_clock)},
         specialty_display_name=load_specialty().display_name,
     )
     ui = UIContext(
-        templates, session_factory, clock, current_session, fetcher or HttpFetcher(), gateway
+        templates,
+        session_factory,
+        clock,
+        current_session,
+        fetcher or HttpFetcher(),
+        practice_clock,
+        gateway,
+        secrets or open_secret_store,
+        ai_client or AnthropicClient,
     )
     routes_profile.register(app, ui)
     routes_contacts.register(app, ui)
     routes_messages.register(app, ui)
     routes_send.register(app, ui)
+    routes_settings.register(app, ui)
 
     @app.get("/bootstrap", response_class=HTMLResponse)
     def bootstrap_page(request: Request) -> HTMLResponse:
@@ -171,11 +198,11 @@ def create_app(
             ).all()
             settings = load_settings(db)
             outreach = status.outreach_status(
-                db, view.active_mode, settings.same_place_scope, clock.now()
+                db, view.active_mode, settings.same_place_scope, practice_clock.now()
             )
             research = research_seed.progress(db, clock.now().date())
             setup = _setup_checklist(db, clock.now(), settings, research.total)
-            open_handoffs = handoff.open_handoffs(db, clock.now())
+            open_handoffs = handoff.open_handoffs(db, practice_clock.now())
             due_tasks = [
                 t
                 for t in replies.open_tasks(db)
