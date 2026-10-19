@@ -148,3 +148,50 @@ def test_begin_immediate_serializes_writers(db_path) -> None:
     engine.dispose()
     assert order == ["first-commit", "second-begin"]
     assert datetime.now(UTC)  # keep the UTC import meaningful for linting
+
+
+def test_send_channel_migration_round_trips(tmp_path) -> None:
+    from marcelorian.db.migrate import downgrade, upgrade
+
+    engine = make_engine(tmp_path / "m.db")
+    upgrade(engine, "0001")
+    upgrade(engine)
+    downgrade(engine, "0001")
+    with engine.connect() as conn:
+        ddl = conn.execute(text("select sql from sqlite_master where name = 'send_attempt'"))
+        assert "handed_off" not in ddl.scalar_one()
+    upgrade(engine)
+    with engine.connect() as conn:
+        ddl = conn.execute(text("select sql from sqlite_master where name = 'send_attempt'"))
+        assert "channel IN ('sandbox','gmail','outlook_handoff')" in ddl.scalar_one()
+    engine.dispose()
+
+
+def test_one_open_handoff_per_message(world) -> None:
+    from marcelorian.db.models import SendAttempt
+
+    world.connect_handoff_mailbox()
+    world.set_mode(Mode.LIVE)
+    camp = world.campaign(world.pi(world.institution()), Mode.LIVE)
+    mid = world.draft_and_approve(camp)
+    assert world.hand_off(mid).outcome == "handed_off"
+    (attempt,) = world.attempts(mid)
+    with pytest.raises(IntegrityError), transaction(world.factory) as s:
+        s.add(
+            SendAttempt(
+                attempt_uid="b" * 32,
+                message_id=mid,
+                snapshot_id=attempt.snapshot_id,
+                snapshot_sha256=attempt.snapshot_sha256,
+                mode="live",
+                channel="outlook_handoff",
+                sender=attempt.sender,
+                recipient=attempt.recipient,
+                intended_recipient=attempt.intended_recipient,
+                app_message_id="<" + "c" * 32 + "@example.test>",
+                x_marcelorian_id="d" * 32,
+                status="handed_off",
+                claimed_at=world.clock.now(),
+            )
+        )
+        s.flush()

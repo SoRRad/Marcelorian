@@ -26,7 +26,8 @@ from marcelorian.config.settings import AppSettings
 from marcelorian.db.models import ApprovalSnapshot, Campaign, CampaignPause, Message, SendAttempt
 from marcelorian.domain.enums import (
     HOLDING_STATES,
-    UNRESOLVED_ATTEMPT_STATES,
+    IN_SUBMISSION_STATES,
+    POSSIBLY_SUBMITTED_STATES,
     UNSENT_CANCELLABLE_STATES,
     Actor,
     CampaignState,
@@ -247,13 +248,14 @@ def release_projected_contact_if_unneeded(
 
 
 def has_unresolved_attempt(session: Session, campaign_id: int) -> bool:
+    """Any possibly submitted, unsettled attempt: in flight, uncertain or handed off."""
     return bool(
         session.scalar(
             select(SendAttempt.id)
             .join(Message, Message.id == SendAttempt.message_id)
             .where(
                 Message.campaign_id == campaign_id,
-                SendAttempt.status.in_([s.value for s in UNRESOLVED_ATTEMPT_STATES]),
+                SendAttempt.status.in_([s.value for s in POSSIBLY_SUBMITTED_STATES]),
             )
             .limit(1)
         )
@@ -292,7 +294,7 @@ def cancel_unsent_messages(
                 session, message, MessageState.CANCELLED, actor=actor, now=now, reason=reason
             )
             cancelled.append(message.id)
-        elif state is MessageState.SENDING:
+        elif state in IN_SUBMISSION_STATES:
             message.cancel_requested_at = message.cancel_requested_at or now
     if clear_schedule:
         campaign.next_step, campaign.next_due_at = None, None

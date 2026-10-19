@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any
 
 from marcelorian.clock import ensure_utc
-from marcelorian.domain.enums import Mode
+from marcelorian.domain.enums import Channel, Mode
 from marcelorian.domain.recipients import RecipientError, normalize_address
 from marcelorian.domain.subjects import expected_subject
 
@@ -94,6 +94,19 @@ class SnapshotContent:
     pi_timezone: str
     test_override: TestOverride | None
     approved_at: datetime
+    #: The channel this approval is for (spec §9.8). Snapshots stored before the field
+    #: existed parse as Gmail (real modes) or the fake transport (sandbox).
+    channel: Channel | None = None
+
+    def __post_init__(self) -> None:
+        if self.channel is None:
+            default = Channel.SANDBOX if self.mode is Mode.SANDBOX else Channel.GMAIL
+            object.__setattr__(self, "channel", default)
+
+    @property
+    def send_channel(self) -> Channel:
+        assert self.channel is not None  # set in __post_init__
+        return self.channel
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -120,6 +133,7 @@ class SnapshotContent:
             "pi_timezone": self.pi_timezone,
             "test_override": self.test_override.to_dict() if self.test_override else None,
             "approved_at": ensure_utc(self.approved_at).isoformat(),
+            "channel": self.send_channel.value,
         }
 
 
@@ -168,6 +182,7 @@ def parse_canonical(text: str) -> SnapshotContent:
         pi_timezone=data["pi_timezone"],
         test_override=TestOverride.from_dict(data["test_override"]),
         approved_at=datetime.fromisoformat(data["approved_at"]),
+        channel=Channel(data["channel"]) if "channel" in data else None,
     )
 
 
@@ -199,9 +214,16 @@ def validate_content(content: SnapshotContent, specialty_display_name: str) -> N
         raise SnapshotError("outside transport_test the actual recipient is the intended recipient")
     if content.mode is Mode.LIVE and content.pi_is_synthetic:
         raise SnapshotError("synthetic identities can never be contacted in live mode")
+    if (content.mode is Mode.SANDBOX) != (content.send_channel is Channel.SANDBOX):
+        raise SnapshotError("sandbox and only sandbox uses the fake transport")
     if content.step == 1:
         if content.thread_id or content.in_reply_to or content.references:
             raise SnapshotError("Email 1 starts a new thread")
+    elif content.send_channel is Channel.OUTLOOK_HANDOFF:
+        # The app cannot see Outlook's thread or Message-IDs; the applicant replies to
+        # the earlier email in Outlook (spec §9.7, §9.8).
+        if content.thread_id or content.in_reply_to or content.references:
+            raise SnapshotError("hand-off follow-ups carry no Gmail thread or reply headers")
     else:
         if not content.thread_id or not content.in_reply_to or not content.references:
             raise SnapshotError("follow-ups need the campaign thread and reply headers")

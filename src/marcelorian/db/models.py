@@ -254,10 +254,13 @@ class RecipientAllowlist(Base):
 
 
 class MailboxAccount(Base):
-    """The connected primary Gmail identity (no send-as aliases)."""
+    """The connected real mailbox: a Gmail identity (no send-as aliases) or an Outlook
+    address used through the hand-off channel, which the app cannot access (§9.8)."""
 
     __tablename__ = "mailbox_account"
+    __table_args__ = (CheckConstraint("kind IN ('gmail','outlook_handoff')", name="kind"),)
     id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), default="gmail", server_default="gmail")
     email: Mapped[str] = mapped_column(String(320))
     scopes_json: Mapped[str] = mapped_column(Text)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -331,7 +334,7 @@ class Message(Base):
         CheckConstraint(f"mode IN {MODES}", name="mode"),
         CheckConstraint(
             "state IN ('draft','awaiting_approval','approved_queued','sending','sent',"
-            "'failed_definite','uncertain','cancelled','needs_reapproval')",
+            "'failed_definite','uncertain','cancelled','needs_reapproval','handed_off')",
             name="state",
         ),
     )
@@ -418,15 +421,17 @@ class SendAttempt(Base):
     __table_args__ = (
         CheckConstraint(f"mode IN {MODES}", name="mode"),
         CheckConstraint(
-            "status IN ('in_flight','sent','failed_definite','uncertain','not_submitted')",
+            "status IN ('in_flight','sent','failed_definite','uncertain','not_submitted',"
+            "'handed_off')",
             name="status",
         ),
-        # At most one unresolved attempt per message (spec §9.6 step 2).
+        CheckConstraint("channel IN ('sandbox','gmail','outlook_handoff')", name="channel"),
+        # At most one unresolved (possibly submitted) attempt per message (spec §9.6 step 2).
         Index(
             "uq_send_attempt_unresolved",
             "message_id",
             unique=True,
-            sqlite_where=text("status IN ('in_flight','uncertain')"),
+            sqlite_where=text("status IN ('in_flight','uncertain','handed_off')"),
         ),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -435,6 +440,7 @@ class SendAttempt(Base):
     snapshot_id: Mapped[int] = mapped_column(ForeignKey("approval_snapshot.id"))
     snapshot_sha256: Mapped[str] = mapped_column(String(64))
     mode: Mapped[str] = mapped_column(String(16))
+    channel: Mapped[str] = mapped_column(String(16), default="gmail", server_default="gmail")
     sender: Mapped[str] = mapped_column(String(320))
     recipient: Mapped[str] = mapped_column(String(320))
     intended_recipient: Mapped[str] = mapped_column(String(320))

@@ -57,6 +57,9 @@ class AppSettings:
     window_end: str = "16:00"
     last_interval_mode: str = LastIntervalMode.CALENDAR_MONTH.value
     last_interval_days: int = 30
+    #: Plain-text signature appended to Outlook hand-off files and copy text (§9.8).
+    #: The Outlook-on-the-web link omits it: Outlook adds the account's own signature.
+    email_signature: str = ""
     blackout_federal_holidays: bool = False
     blackout_year_end: bool = False
     year_end_start: str = "12-20"
@@ -79,6 +82,8 @@ class AppSettings:
 
 
 DEFAULTS = AppSettings()
+#: Hand-off signature length bound (spec §9.8).
+MAX_SIGNATURE_CHARS = 2000
 #: Sanity bound for the N-day last interval (B16: finite, sensible values).
 MAX_LAST_INTERVAL_DAYS = 365
 #: Scheduling searches about a year ahead for the next window; longer blackouts are invalid.
@@ -143,6 +148,12 @@ def validate(settings: AppSettings) -> AppSettings:
     for key in ("blackout_federal_holidays", "blackout_year_end", "hold_slot_14d_after_email4"):
         if not isinstance(getattr(settings, key), bool):
             raise SettingsError(f"{key} must be true or false")
+    signature = settings.email_signature
+    if not isinstance(signature, str) or len(signature) > MAX_SIGNATURE_CHARS:
+        raise SettingsError(f"email_signature must be text of at most {MAX_SIGNATURE_CHARS} chars")
+    if any((ord(ch) < 32 and ch not in "\r\n\t") or ord(ch) == 127 for ch in signature):
+        raise SettingsError("email_signature must not contain control characters")
+    values["email_signature"] = signature.replace("\r\n", "\n")
     try:
         MonthDay.parse(settings.year_end_start)
         MonthDay.parse(settings.year_end_end)

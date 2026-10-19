@@ -56,6 +56,12 @@ the disagreement is a bug to report.
 | D4 | Tooling | ruff, strict typing for safety-critical modules, property-based tests for timing and cap boundaries. Otherwise proportionate. | §2 | P0 | `pyproject.toml` (ruff, mypy); `hypothesis` tests in `tests/unit/test_timing.py` (timing) and `tests/service/test_handoff_coverage.py` (24 h / 30-day boundaries) |
 | W1 | Send window adjustability | Owner answer to note 7 (2026-10-16): the window may be **widened** as well as narrowed, anywhere within **Mon–Fri 08:00–16:00** PI local time. The default was Tue–Thu 08:00–11:00 until the owner's answer of 2026-10-17: **the default is now Mon–Fri 08:00–16:00**, the outer bound itself. The window can only be narrowed, and re-widening a narrowed window stays within the default, so it needs no confirmation (the slot-based widening check remains for any future narrower default); every change is audited. Tests of window-edge mechanics pin the old narrow window explicitly (`World.narrow_window`, `@pytest.mark.narrow_window`). The window end replaces the fixed 11:00 limit in every check (claim, preflight crossing, missed-window portion). | §1, §9.4, §9.6, §16, §19 (15, 55) | P0 | `config/settings.py` (`WINDOW_OUTER_*`); `tests/service/test_settings.py`, `tests/service/test_gateway.py`, `tests/service/test_gateway_race.py` |
 | D5 | Canned sandbox drafts | Clearly labelled canned synthetic drafts in sandbox, so practice and tests need no AI spend. They are not validated AI output or live-send-ready. No credentials needed for offline work. | §12 | Doc (P2) | — |
+| S1 | Applicant-triggered sending | Owner answer (2026-10-19): "I want to press the send button myself." Nothing is sent without a click at that moment; the tray never dispatches on its own. Approval locks the text; the send button unlocks with a countdown when window, due time, pacing and caps allow, and every check runs at the click. Supersedes the auto-dispatch in the §1 Sending row. | §1, §9.2, §9.8 | P0 (rules, readiness); UI P2 | `services/handoff.py` (`readiness`); `tests/service/test_handoff.py` |
+| S2 | Mailbox channels | Owner answers (2026-10-19): Outlook primary, Gmail secondary, switchable at setup. The university Outlook cannot get IT approval for an API app, so Outlook is a **hand-off channel** with no mailbox access. The M02 identity rule covers both channels (switching only before real-mode history). | §1, §9.8, §15 | P0 | `services/approvals.py` (`connect_handoff_mailbox`); `tests/service/test_handoff.py` |
+| S3 | Hand-off methods | Owner tested on the work computer (2026-10-19) that both an Outlook-on-the-web compose link and an `X-Unsent` `.eml` file open as editable new messages; the owner chose to have both offered each time, plus copy buttons. | §9.8 | P0 (builders); UI P2 | `domain/handoff.py`; `tests/unit/test_handoff_package.py` |
+| S4 | Hand-off tracking | Owner answer (2026-10-19): manual clicks. The applicant records **Sent** / **Not sent**, and before each hand-off confirms no prior contact (Email 1) or no reply (follow-ups); a PI reply can be reported any time. No Bcc copies to a personal mailbox (work-mail policy). | §9.8 | P0 | `services/handoff.py` |
+| S5 | Open hand-offs | Owner answer (2026-10-19, asked about drafts): three at a time. At most three hand-offs may be unresolved at once. | §9.8 | P0 | `services/handoff.py` (`MAX_OPEN_HANDOFFS`) |
+| S6 | Edits in Outlook | Owner answer (2026-10-19): small edits allowed. The approved snapshot stays the record; the Sent confirmation can note that edits were made. | §9.8 | P0 | `services/handoff.py` |
 
 ## P0 implementation notes (behavior chosen inside the decisions, documented here)
 
@@ -330,3 +336,41 @@ owner's written description of each finding.
     other; a closed campaign's sent history does not hold the kept one. The
     Email 1 rule is unchanged. Tests:
     `tests/service/repair/test_r3_followup_duplicate.py`.
+35. **Outlook hand-off implementation (S1–S6).** The hand-off reuses the
+    gateway's final checks (`gateway.final_checks`), minus the ones that need
+    the mailbox (auth block, sync coverage, verified thread headers, Gmail
+    preflight). A hand-off is a `send_attempt` with channel `outlook_handoff`
+    and status `handed_off`; the message moves `approved_queued → handed_off`.
+    It holds the 24-hour budget and records pacing at the hand-off instant
+    (no hand-off limit applies: nothing is submitted by the app). `handed_off`
+    counts as possibly submitted wherever an unresolved attempt does (the
+    one-per-message index, duplicate outreach, the own-attempt hold, keeping
+    projected contacts) but is never touched by Gmail reconciliation or
+    startup recovery. **Sent** finalizes through `finalize_sent` with
+    provenance `applicant_reported` and no Gmail IDs; follow-up approval in
+    this channel needs no verified Message-ID (there is none to verify), and
+    its snapshot has no thread ID or references. **Not sent** releases the
+    budget and the message needs re-approval, like `not_invoked`. Applicant
+    confirmations (no prior contact, no reply, edits) are stored in the
+    hand-off's audit entry. The `.eml` builder writes plain text UTF-8, no
+    From/Date/Message-ID headers, and refuses CR/LF or control characters in
+    header values. The compose link is built only when the full URL fits
+    2,000 characters. The email is built before anything is recorded (a build
+    failure is `email_not_buildable` with no hand-off), and the signature used
+    is stored with the hand-off so reopening returns the identical email.
+    Missed-window handling: a hand-off click the app itself holds (pacing,
+    budget, capacity, three open hand-offs, an unresolved attempt) is recorded
+    as a functioning evaluation, so that window rolls as a Gmail deferral with
+    a current sync would; a window that passes with **no click** follows the
+    B7 rule and needs re-approval (owner decision pending on rolling instead).
+    The countdown never shows a time while a hold no clock ends applies.
+    **Not sent is final** (no correction to Sent): the P2 screen must ask for
+    confirmation before recording it, since a re-approved message can be
+    handed off again.
+36. **Migrations on existing data.** Batch table rebuilds (copy, drop, rename)
+    fail with foreign keys enforced once other rows reference the table, so
+    `db.migrate` runs every upgrade and downgrade with foreign keys off for
+    that connection (set before the transaction), runs
+    `PRAGMA foreign_key_check` before committing (any violation rolls back),
+    and turns enforcement back on. Tested on a populated 0001 database
+    (`tests/db/test_migration_data.py`).

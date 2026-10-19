@@ -44,9 +44,12 @@ from marcelorian.db.models import (
 )
 from marcelorian.domain.enums import (
     HOLDING_STATES,
+    IN_SUBMISSION_STATES,
+    POSSIBLY_SUBMITTED_STATES,
     Actor,
     AttemptStatus,
     CampaignState,
+    Channel,
     DependencyKind,
     FactStatus,
     MessageState,
@@ -68,7 +71,6 @@ from marcelorian.domain.timing import (
     SchedulingError,
     Window,
     eligible_window,
-    in_window,
     load_zone,
 )
 from marcelorian.services import campaigns as campaign_svc
@@ -107,8 +109,11 @@ class ApprovalOutcome:
     message_id: int
     snapshot_id: int
     snapshot_sha256: str
+    #: Approval never sends (S1): the applicant presses send separately once it unlocks.
     button_label: str
     window: Window
+    #: Earliest instant the send button can unlock (window, due time; caps and pacing
+    #: may move it later: ``handoff.readiness`` gives the live countdown).
     expected_dispatch_at: datetime
     capacity: CapacityResult | None
 
@@ -246,7 +251,7 @@ def save_draft(
         )
     else:
         current = MessageState(message.state)
-        if current in (MessageState.SENDING, MessageState.SENT, MessageState.UNCERTAIN):
+        if current in (*IN_SUBMISSION_STATES, MessageState.SENT, MessageState.UNCERTAIN):
             raise ApprovalError(["message_not_editable"])
         if current is MessageState.CANCELLED and step == 1 and state is not CampaignState.CANDIDATE:
             raise ApprovalError(["campaign_not_draftable"])
@@ -378,7 +383,7 @@ def duplicate_outreach(
         for other in others:
             if other.state in active_states or _sent_messages(session, other):
                 return True
-    attempt_states = [AttemptStatus.IN_FLIGHT.value, AttemptStatus.UNCERTAIN.value]
+    attempt_states = [s.value for s in POSSIBLY_SUBMITTED_STATES]
     if step == 1:
         attempt_states.append(AttemptStatus.SENT.value)
     if person.addresses:
@@ -456,7 +461,12 @@ def approval_blockers(
             reasons.append("sequence_stopped")
         if message.due_at is None:
             reasons.append("due_time_missing")
-        if send_results.verified_references(session, campaign.id, message.step) is None:
+        if (
+            message_channel(session, mode) is not Channel.OUTLOOK_HANDOFF
+            and send_results.verified_references(session, campaign.id, message.step) is None
+        ):
+            # A hand-off has no Message-ID to verify: follow-ups thread when the applicant
+            # replies to the earlier email in Outlook (§9.7, §9.8).
             reasons.append("thread_headers_unverified")
         if duplicate_outreach(
             session, campaign, ready.address if ready else None, step=message.step
@@ -482,6 +492,16 @@ def approval_blockers(
 
 def _active_mailbox(session: Session) -> MailboxAccount | None:
     return session.scalar(select(MailboxAccount).where(MailboxAccount.active.is_(True)))
+
+
+def active_channel(session: Session) -> Channel | None:
+    """The real mailbox's channel (§9.8), or None when no mailbox is connected."""
+    mailbox = _active_mailbox(session)
+    return Channel(mailbox.kind) if mailbox is not None else None
+
+
+def message_channel(session: Session, mode: Mode) -> Channel | None:
+    return active_channel(session) if mode.is_real else Channel.SANDBOX
 
 
 def _attachment_refs(session: Session, cv_ids: list[int]) -> list[tuple[AttachmentRef, CvVersion]]:
@@ -545,10 +565,13 @@ def approve(
         json.loads(message.draft_test_override_json) if message.draft_test_override_json else None
     )
     sent = _sent_messages(session, campaign)
-    thread_id = sent[0].gmail_thread_id if sent and message.step > 1 else None
+    handoff_channel = message_channel(session, mode) is Channel.OUTLOOK_HANDOFF
+    thread_id = (
+        sent[0].gmail_thread_id if sent and message.step > 1 and not handoff_channel else None
+    )
     references = (
         send_results.verified_references(session, campaign.id, message.step) or ()
-        if message.step > 1
+        if message.step > 1 and not handoff_channel
         else ()
     )
     attachments = _attachment_refs(session, json.loads(message.draft_attachments_json or "[]"))
@@ -584,6 +607,7 @@ def approve(
         pi_timezone=str(institution.iana_tz),
         test_override=override,
         approved_at=now,
+        channel=message_channel(session, mode),
     )
     try:
         validate_content(content, specialty_display_name)
@@ -595,7 +619,7 @@ def approve(
                 session,
                 campaign=campaign,
                 pi=pi,
-                transport_kind="gmail" if mode.is_real else "sandbox",
+                transport_kind=(message_channel(session, mode) or Channel.GMAIL).value,
                 snapshot_to=content.to,
                 snapshot_intended=content.intended_recipient,
                 has_test_override=override is not None,
@@ -717,12 +741,11 @@ def approve(
         detail={"sha256": digest, "version": version, "override": override is not None},
         mode=mode.value,
     )
-    in_window_now = in_window(now, tz, policy) and now >= due_at
     return ApprovalOutcome(
         message_id=message.id,
         snapshot_id=snapshot.id,
         snapshot_sha256=digest,
-        button_label="Approve and send" if in_window_now else "Approve and queue",
+        button_label="Approve",
         window=window,
         expected_dispatch_at=max(now, window.start, due_at),
         capacity=capacity,
@@ -739,6 +762,8 @@ def revoke(session: Session, message: Message, *, actor: Actor, now: datetime) -
     state = MessageState(message.state)
     if state is MessageState.SENDING:
         raise CannotRecall("this message was already claimed for submission and cannot be recalled")
+    if state is MessageState.HANDED_OFF:
+        raise CannotRecall("this message was handed off to Outlook; record Sent or Not sent")
     if state is not MessageState.APPROVED_QUEUED:
         raise ApprovalError(["message_not_revocable"])
     _end_snapshot(session, message, SnapshotState.REVOKED, now, "revoked")
@@ -767,7 +792,11 @@ def request_cancel_claimed(
         entity_type="message",
         entity_id=message.id,
         action="cancel_requested_not_recalled",
-        reason="submission may already have started; the attempt will be reconciled",
+        reason=(
+            "handed off to Outlook; takes effect when Not sent is recorded"
+            if MessageState(message.state) is MessageState.HANDED_OFF
+            else "submission may already have started; the attempt will be reconciled"
+        ),
         mode=message.mode,
     )
 
@@ -778,7 +807,7 @@ def cancel_initial(session: Session, campaign: Campaign, *, actor: Actor, now: d
     if message is None:
         raise CancelRefused("there is no Email 1 to cancel")
     state = MessageState(message.state)
-    if state is MessageState.SENDING:
+    if state in IN_SUBMISSION_STATES:
         request_cancel_claimed(session, message, actor=actor, now=now)
         return "not_recalled"
     if state is MessageState.UNCERTAIN or campaign_svc.has_unresolved_attempt(session, campaign.id):
@@ -799,7 +828,7 @@ def stop_sequence(session: Session, campaign: Campaign, *, actor: Actor, now: da
     for message in session.scalars(
         select(Message).where(Message.campaign_id == campaign.id, Message.step >= 2)
     ):
-        if MessageState(message.state) is MessageState.SENDING:
+        if MessageState(message.state) in IN_SUBMISSION_STATES:
             request_cancel_claimed(session, message, actor=actor, now=now)
     campaign_svc.stop_followup_sequence(session, campaign, actor=actor, now=now)
 
@@ -1073,39 +1102,48 @@ def real_mode_history_exists(session: Session) -> bool:
     return any(session.scalar(stmt.limit(1)) is not None for stmt in checks)
 
 
-def _bound_identity(session: Session) -> set[str]:
-    """The identity this install is bound to: the latest mailbox row, or else the
-    senders recorded in real-mode history (rows removed by a future disconnect or a
-    legacy database must not make a different account look like a first connection)."""
+def _bound_identity(session: Session) -> tuple[set[str], set[str]]:
+    """The addresses and channels this install is bound to: the latest mailbox row, or
+    else the senders and channels recorded in real-mode history (rows removed by a future
+    disconnect or a legacy database must not make a different account look like a first
+    connection)."""
     latest = session.scalar(select(MailboxAccount).order_by(MailboxAccount.id.desc()).limit(1))
     if latest is not None:
-        return {latest.email}
-    senders = set(
-        session.scalars(select(SendAttempt.sender).where(SendAttempt.mode.in_(_REAL_MODES)))
-    )
+        return {latest.email}, {latest.kind}
+    attempts = session.execute(
+        select(SendAttempt.sender, SendAttempt.channel).where(SendAttempt.mode.in_(_REAL_MODES))
+    ).all()
+    senders = {sender for sender, _channel in attempts}
     senders |= set(
         session.scalars(
             select(ApprovalSnapshot.sender).where(ApprovalSnapshot.mode.in_(_REAL_MODES))
         )
     )
-    return {sender.strip().lower() for sender in senders if sender}
+    channels = {channel for _sender, channel in attempts}
+    return {sender.strip().lower() for sender in senders if sender}, channels
 
 
-def check_mailbox_connection(session: Session, email: str) -> ConnectionKind:
-    """Read-only: classify a connection or raise ``MailboxIdentityRefused`` (M02).
+def check_mailbox_connection(
+    session: Session, email: str, channel: Channel = Channel.GMAIL
+) -> ConnectionKind:
+    """Read-only: classify a connection or raise ``MailboxIdentityRefused`` (M02, S2).
 
     v1 policy: the same identity may always reconnect; a different identity is allowed
     only as a setup-only switch, before any real-mode history exists. Identity is the
-    canonical primary address (no stable account id without extra scopes, spec §10).
+    canonical primary address (no stable account id without extra scopes, spec §10)
+    together with the channel: moving from Gmail to the Outlook hand-off (or back) is a
+    switch too, since history in one mailbox cannot continue in another.
     """
+    if channel is Channel.SANDBOX:
+        raise MailboxIdentityRefused(["mailbox_channel_invalid"])
     try:
         normalized = normalize_address(email)
     except RecipientError as exc:
         raise MailboxIdentityRefused(["mailbox_address_invalid"]) from exc
-    bound = _bound_identity(session)
-    if not bound:
+    addresses, channels = _bound_identity(session)
+    if not addresses:
         return ConnectionKind.FIRST
-    if bound == {normalized}:
+    if addresses == {normalized} and channels <= {channel.value}:
         return ConnectionKind.SAME_IDENTITY
     if real_mode_history_exists(session):
         raise MailboxIdentityRefused(["mailbox_identity_switch_after_real_history"])
@@ -1128,16 +1166,47 @@ def connect_mailbox(
     memory, outside any transaction; call this; only after it commits, store the new
     token. A refusal discards the new token and leaves stored credentials untouched.
     """
-    kind = check_mailbox_connection(session, email)
-    normalized = normalize_address(email)
+    kind = check_mailbox_connection(session, email, Channel.GMAIL)
     if scopes >= REQUIRED_SCOPES:
         runtime.set_auth_block(session, False, None, now=now)
     else:
         runtime.set_auth_block(session, True, "required_scopes_missing", now=now)
+    return _record_connection(session, email, Channel.GMAIL, scopes, kind, actor=actor, now=now)
+
+
+def connect_handoff_mailbox(
+    session: Session, email: str, *, actor: Actor, now: datetime
+) -> MailboxAccount:
+    """Record the Outlook address used through the hand-off channel (§9.8; S2).
+
+    No credential exists: the app never accesses that mailbox. The applicant enters
+    the address they send from; it becomes the snapshot sender and the identity key.
+    The same M02 rule applies: it may always reconnect, and replacing a different
+    mailbox (or the Gmail channel) is a setup-only switch before real-mode history.
+    """
+    kind = check_mailbox_connection(session, email, Channel.OUTLOOK_HANDOFF)
+    # No token, so nothing to be blocked on; a stale Gmail auth block must not linger.
+    runtime.set_auth_block(session, False, None, now=now)
+    return _record_connection(
+        session, email, Channel.OUTLOOK_HANDOFF, frozenset(), kind, actor=actor, now=now
+    )
+
+
+def _record_connection(
+    session: Session,
+    email: str,
+    channel: Channel,
+    scopes: frozenset[str],
+    kind: ConnectionKind,
+    *,
+    actor: Actor,
+    now: datetime,
+) -> MailboxAccount:
+    normalized = normalize_address(email)
     if kind is ConnectionKind.SAME_IDENTITY:
         latest = session.scalar(
             select(MailboxAccount)
-            .where(MailboxAccount.email == normalized)
+            .where(MailboxAccount.email == normalized, MailboxAccount.kind == channel.value)
             .order_by(MailboxAccount.id.desc())
             .limit(1)
         )
@@ -1157,7 +1226,7 @@ def connect_mailbox(
                 old.id,
                 actor=actor,
                 now=now,
-                reason="connected Gmail account changed",
+                reason="connected mailbox changed",
             )
         sync_svc.reset_coverage(session, sync_svc.mailbox_key_for(Mode.LIVE), now)
         runtime.set_live_readiness(session, False, actor=actor, now=now)
@@ -1170,7 +1239,11 @@ def connect_mailbox(
             action="mailbox_switched_setup_only",
         )
     account = MailboxAccount(
-        email=normalized, scopes_json=json.dumps(sorted(scopes)), active=True, verified_at=now
+        kind=channel.value,
+        email=normalized,
+        scopes_json=json.dumps(sorted(scopes)),
+        active=True,
+        verified_at=now,
     )
     session.add(account)
     session.flush()
@@ -1181,5 +1254,6 @@ def connect_mailbox(
         entity_type="mailbox_account",
         entity_id=account.id,
         action="connected",
+        detail={"channel": channel.value},
     )
     return account

@@ -31,13 +31,13 @@ The application promises **duplicate-execution protection and conservative handl
 |---|---|
 | Name / slogan | **Marcelorian** / **May the Force Hire You**. Text only. No franchise logos, characters, fonts, or imagery in the app or the emails. |
 | Users | One applicant on a Windows laptop. The applicant enters their own profile; nothing applicant-specific is hardcoded. No hosted or multi-user platform in v1. |
-| Roles | Owner: owns the Google Cloud project and a dedicated, spend-limited Anthropic pilot credential, and monitors a consented report. Applicant: authorizes their own Gmail and approves every message. |
+| Roles | Owner: owns the Google Cloud project and a dedicated, spend-limited Anthropic pilot credential, and monitors a consented report. Applicant: connects their own mailbox (Outlook hand-off or Gmail, §9.8), approves every message and presses send for each one. |
 | Specialty | Ophthalmology, all subspecialties, via a config file. New specialty = new config file. |
 | Geography | US institutions only. |
 | Subject | Email 1: `Research Position Application – Ophthalmology` (specialty display name from config). Emails 2–4 reply in the same thread with one normalized `Re:` prefix. No personalized subjects. |
 | Sequence | 4 emails total. Email 2 is due 7×24 h after Email 1 **actually sent**. Email 3 is due 7×24 h after Email 2 actually sent. Email 4 is due 1 calendar month after Email 3 actually sent. A setting allows N days for the last interval (calendar days in the PI's time zone; §9.3, C8). |
 | Approval | Every message, including each follow-up, is approved individually. Approval authorizes one immutable snapshot (§9.1). |
-| Sending | A tray worker starts at Windows login (with explicit setup consent). Approved messages are queued and dispatched in the next permitted window. If approved inside a window, they dispatch promptly once all checks and pacing allow. |
+| Sending | Nothing is sent without the applicant pressing a send button at that moment (owner decision S1, 2026-10-19). Approval locks the text; the send button unlocks, with a countdown, when the window, due time, pacing and caps allow. The primary channel is an Outlook hand-off: the app prepares the email and the applicant sends it from Outlook and records the outcome; Gmail through its API is the setup-switchable secondary channel (§9.8). |
 | Window | Default Mon–Fri, 08:00 (inclusive) to 16:00 (exclusive), in the PI's **verified** IANA time zone (owner decisions W1, 2026-10-16 and 2026-10-17). This is also the outer bound: the applicant may narrow it (days and hours), never extend it beyond Mon–Fri 08:00–16:00. Every settings change is audited. |
 | Caps | 2 pending PIs per institution; 1 per lab; 3 newly contacted PIs per institution per rolling 30 days; 25 app-originated real Gmail submissions per rolling 24 hours. All adjustable (validated; increases above these defaults need explicit confirmation and are audited; §11, B16). |
 | Slot release | A genuine reply or a successfully sent Email 4 frees the pending slot. Auto-replies keep the slot. Confirmed bounces stop the sequence. Manual closures are auditable. |
@@ -316,7 +316,7 @@ Approval binds a snapshot containing: campaign ID, step, mode, connected sender 
   - Neither action recalls a claimed message or clears an `uncertain` attempt (§9.6).
 
 ### 9.2 Buttons and expectations
-- Labels: **Approve and queue** (outside the window) or **Approve and send** (inside the window).
+- Labels: **Approve** locks the text; then **Send** (Gmail channel) or **Open in Outlook** / **Download email file** (hand-off channel, §9.8). Outside the window, before the due time or inside the pacing gap the button is disabled with a countdown.
 - Show the earliest expected dispatch time in **both** PI and applicant time zones. It is conditional on: the laptop awake, the tray running, network, caps, pacing, and a passing final Gmail check.
 - The UI explains that closing the browser does not stop the tray, but quitting the tray, sleep, logout, or shutdown prevents dispatch.
 
@@ -363,7 +363,7 @@ The tray worker processes in this order:
 Slow discovery or AI work never delays Gmail safety checks or dispatch. A heartbeat is recorded every cycle.
 
 ### 9.6 Single send gateway
-**All** sending paths (UI approval, scheduler tick, recovery) call one gateway. There is no other code path to `messages.send`.
+**All** sending paths call one gateway; since owner decision S1 the only trigger is the applicant's **Send** click (recovery reconciles, it never sends). There is no other code path to `messages.send`. The Outlook hand-off (§9.8) never sends anything itself; it runs the same final checks before giving the email to the applicant.
 
 1. **Preflight** (no DB lock held across network):
    - Gmail token valid and the scopes and account match the snapshot.
@@ -409,7 +409,23 @@ Slow discovery or AI work never delays Gmail safety checks or dispatch. A heartb
 Verify in P0.3 that Gmail preserves the custom Message-ID and `X-Marcelorian-Id` header, using metadata only (never bodies or raw data). If it does not, correlate using the returned IDs and metadata and document the behavior.
 
 ### 9.7 Threading
-Follow-ups use the original campaign `threadId`, set `In-Reply-To` and `References` from the actual (provider-observed, verified) RFC Message-IDs, and use one subject chain (`Re: Research Position Application – Ophthalmology`). Earlier messages are not quoted automatically (B15). Never merge distinct PIs because they share a subject. Test the en-dash subject and `Re:` normalization on real accounts in P0.3.
+Follow-ups use the original campaign `threadId`, set `In-Reply-To` and `References` from the actual (provider-observed, verified) RFC Message-IDs, and use one subject chain (`Re: Research Position Application – Ophthalmology`). Earlier messages are not quoted automatically (B15). Never merge distinct PIs because they share a subject. Test the en-dash subject and `Re:` normalization on real accounts in P0.3. In the Outlook hand-off channel (§9.8) the app cannot read Message-IDs; follow-ups thread when the applicant replies to the earlier email in Outlook.
+
+### 9.8 Send channels and applicant-triggered sending (owner decisions S1–S6, 2026-10-19)
+Nothing is ever sent without the applicant pressing a send button at that moment (S1). The tray never dispatches on its own: approval locks the text; sending is a separate, deliberate click. When a message may not go yet (outside the window, not due, inside the pacing gap, over budget or capacity), its button is disabled and shows a countdown to the earliest permitted instant; the applicant clicks once it unlocks. All checks run at the click.
+
+The real mailbox uses one of two channels, chosen at setup (S2). The rule of §15 applies to both: the bound identity may always reconnect; switching to a different mailbox (or channel) is a setup-only action allowed only before any real-mode history exists, and a PI's whole sequence stays in the mailbox that sent its Email 1.
+
+1. **Outlook hand-off (primary).** The app has **no access** to the Outlook mailbox: no Microsoft API, no app registration and no IT approval. The applicant presses **Open in Outlook** or **Download email file**; the app runs every final check of §9.6 that does not need the mailbox (snapshot and hash, mode, pause, campaign stop/review, do-not-contact, duplicate outreach, recipient, verified time zone, salutation, due time, window, pacing, 24-hour budget, capacity and reservations), records a **hand-off** (the `send_attempt`, status `handed_off`; budget held; pacing recorded at the hand-off), and gives the applicant the email (S3):
+   - a link that opens a pre-filled new message in Outlook on the web (Outlook adds the applicant's signature; disabled when the email is too long for a link);
+   - an `.eml` file that Outlook opens as an editable unsent message (`X-Unsent: 1`; the app's signature setting is appended; no From header, Outlook uses the signed-in account);
+   - copy buttons for To, Subject and Body. Follow-ups are sent by replying to the earlier email in Outlook and pasting the body, which keeps the thread; the link and file give the `Re:` subject but start a new thread.
+   The applicant presses Send in Outlook and then records the outcome in the app (S4): **Sent** (the send time is that confirmation; provenance `applicant_reported`; the next step is scheduled from it) or **Not sent** (budget released; the message needs re-approval; final, so the screen asks for confirmation first). Small edits in Outlook are allowed; the app keeps the approved text as the record and notes that edits may have been made (S6). The same hand-off can be reopened (link, file, copy) until it is resolved; reopening never creates a second hand-off. An unresolved hand-off counts as possibly sent: it blocks another hand-off or send to the same person and holds budget, exactly like an unresolved attempt. At most **three** hand-offs may be unresolved at once (S5).
+   - **Known limit:** the checks hold at the hand-off instant. The app cannot see or control when the applicant presses Send in Outlook, so a send pressed later (after the window, or after a reply arrived) is outside its control; the reminder and the Sent confirmation keep that gap short and recorded.
+   - **Checks the app cannot make:** without mailbox access there is no sync, no prior-contact search and no reply search. Instead the applicant confirms each time: for Email 1, that they searched Outlook for the PI's listed addresses and found no earlier contact (or reports that they found some, which opens a `prior_contact_found` review); for a follow-up, that the PI has not replied (or reports the reply, which moves the campaign to `conversation`). A PI reply can be reported at any time. These confirmations are recorded with the hand-off and are the applicant's attestation, not a mailbox check.
+2. **Gmail API (secondary).** As specified in §9.6, §9.7 and §10, except that dispatch happens only on the applicant's **Send** click (S1).
+
+Sandbox keeps the fake transport and is unaffected.
 
 ---
 
@@ -556,6 +572,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 
 - **Gmail auth failure, scope mismatch, or account mismatch:** halt all dispatch. Show a "Gmail needs reconnecting" banner and toast with a reconnect button. Reconnect must use the bound Gmail identity (its canonical primary address): once any live or transport_test campaign, attempt or mailbox record exists, a different account is refused before anything changes and the banner stays. Before that, switching accounts is a setup-only action that inherits no history cursor, coverage or readiness; if live mode was active it returns to sandbox with dispatch paused. Production publishing status avoids the Testing-mode 7-day token expiry, but tokens can still be revoked or expire, so this state is permanent and expected.
 - **Sync failure:** dispatch stays blocked; the banner shows `last_gmail_coverage_at`.
+- **Outlook hand-off channel (§9.8):** there is no token to fail. The app reminds the applicant about any hand-off left unresolved (neither Sent nor Not sent) for more than a day; it stays possibly sent until resolved.
 - **Public API errors:** backoff and retry (read-only calls only). Keep partial results.
 - **LLM errors or invalid output:** no draft is created; offer a retry. Never fall back to unvalidated text.
 - **Claude key invalid, model inaccessible, or spend limit reached:** clear status message; drafting is disabled and everything else continues.
@@ -636,6 +653,8 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
   3. **Then, with my explicit go-ahead,** a Windows Gmail spike in `transport_test`: self-send (connectivity); a two-address thread where the second address replies; verify threading, the en-dash subject and `Re:`, Message-ID/`X-Marcelorian-Id` preservation (metadata only), metadata-only fetch, and history sync. The plain-language runbook, recipient-allowlist checklist, and redacted report template are prepared before this gate. The small owner-assisted Windows spike launcher (not the P5 installer) and the real Gmail adapter it drives are written only after that go-ahead, so nothing that can send real email exists before it. The operator, Windows build, sender, second consenting test address, and OAuth client configuration are collected on the local test machine at the gate, never assumed and never committed. Synthetic message content only; never the applicant's real CV (A3).
 
   No real PI contact. Report untested items. Do not declare the 7-day token survival passed until 7+ days have actually elapsed.
+
+  **Outlook hand-off channel (S2, 2026-10-19):** the owner tested on the work computer that the Outlook-on-the-web compose link and an `X-Unsent` `.eml` file both open as editable new messages in the applicant's Outlook. A later explicitly authorized check (P0.3b) covers a real hand-off self-send in transport_test, the follow-up reply-and-paste flow, and whether an `.eml` follow-up threads.
 - **P1 — Profile and discovery.** Wizard steps through publications; consented CV extraction and manual facts; PubMed, OpenAlex (API key), RePORTER, seed-URL faculty pages (optional ClinicalTrials.gov); identity/affiliation/email/tz verification; evidence; assessment; candidates UI.
 - **P2 — Drafting, review, and rules.** Templates, LLM fill + validation, the approval queue, and drafting/review integration on top of the P0 scheduling/caps/reservation/state logic (extended with tests as needed). Sandbox mode end to end. Reuse the P0 gateway; no temporary sender.
 - **P3 — Automation.** Tray worker, dispatcher priorities, wiring the P0 window/pacing/missed-window rules into tray automation, restart/sleep/resume recovery, history sync with gap recovery, inbound classification, the reviews and tasks screens, toasts.
@@ -750,6 +769,12 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 78. Withdrawing a fact's confirmation without changing its text invalidates only unsent approvals that cite it; no-op and unrelated edits change nothing; the claim refuses any unconfirmed fact (§4, B18, M05).
 79. Follow-ups thread on the provider-observed Message-ID; a rewritten ID is recorded; a failed metadata read after a successful send never resends and holds the next step until verified (fake transport only; live preservation is a P0.3 item) (§9.6, §9.7, B12, M06).
 80. An identity link found after two Email 1s went out holds both follow-up sequences (approval refused, queued follow-ups blocked) until the applicant closes one; the kept sequence then continues (§9.6, round-3 #2).
+81. Outlook hand-off: every final check runs at the hand-off; a refused check creates no hand-off; the hand-off holds budget and pacing; reopening returns the same email without a second hand-off (§9.8, S1–S3).
+82. Hand-off outcomes: **Sent** records `sent_at` and schedules the next step from it; **Not sent** releases the budget and requires re-approval; neither can be recorded twice (§9.8, S4).
+83. An unresolved hand-off counts as possibly sent: it blocks another hand-off to the same person and a duplicate sequence; at most three hand-offs are unresolved at once (§9.8, S5).
+84. Email 1 hand-off requires the applicant's prior-contact confirmation; a reported earlier contact opens `prior_contact_found`. A follow-up hand-off requires the no-reply confirmation; a reported reply moves the campaign to `conversation` and cancels unsent steps (§9.8).
+85. The `.eml` file opens as an unsent message (`X-Unsent: 1`), has no From header, carries the approved To, subject, body and signature, and rejects header injection; the Outlook link is disabled when too long (§9.8, S3).
+86. The Gmail gateway refuses to send while the active mailbox is an Outlook hand-off, and the hand-off refuses while it is Gmail; the send button's countdown matches the gateway's window, due, pacing and budget checks (§9.8, S1, S2).
 
 **LIVE (Windows 11, transport_test, allowlisted addresses only, explicit authorization)**
 - L1: Self-send; a two-address thread with a reply from the second address; verify threading/subject.
@@ -781,6 +806,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 | Report is read-only + consented | Report service (allowlisted file ID, RAW) | 47–48 |
 | Audit integrity | Exports (lossless, formula-safe) + backups | 49–51 |
 | Local UI protected | Session bootstrap + Host/Origin/CSRF + lenient cookie parsing | 52, 73 |
+| Nothing sent without the applicant's click | No auto-dispatch; send-button readiness shares the claim's final checks; Outlook hand-off with recorded Sent/Not sent | 81–86 |
 
 ---
 

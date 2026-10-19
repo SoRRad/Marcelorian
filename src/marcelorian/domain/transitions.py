@@ -31,10 +31,14 @@ CAMPAIGN_TRANSITIONS: dict[C, frozenset[C]] = {
 MESSAGE_TRANSITIONS: dict[M, frozenset[M]] = {
     M.DRAFT: frozenset({M.AWAITING_APPROVAL, M.CANCELLED}),
     M.AWAITING_APPROVAL: frozenset({M.APPROVED_QUEUED, M.DRAFT, M.CANCELLED}),
-    M.APPROVED_QUEUED: frozenset({M.SENDING, M.AWAITING_APPROVAL, M.NEEDS_REAPPROVAL, M.CANCELLED}),
+    M.APPROVED_QUEUED: frozenset(
+        {M.SENDING, M.HANDED_OFF, M.AWAITING_APPROVAL, M.NEEDS_REAPPROVAL, M.CANCELLED}
+    ),
     # NEEDS_REAPPROVAL: the gateway never invoked the transport (stale claim hand-off).
     M.SENDING: frozenset({M.SENT, M.FAILED_DEFINITE, M.UNCERTAIN, M.NEEDS_REAPPROVAL}),
     M.UNCERTAIN: frozenset({M.SENT, M.NEEDS_REAPPROVAL}),
+    # Outlook hand-off: the applicant records Sent, or Not sent (re-approval required).
+    M.HANDED_OFF: frozenset({M.SENT, M.NEEDS_REAPPROVAL}),
     M.FAILED_DEFINITE: frozenset({M.APPROVED_QUEUED, M.AWAITING_APPROVAL, M.CANCELLED}),
     M.NEEDS_REAPPROVAL: frozenset({M.APPROVED_QUEUED, M.AWAITING_APPROVAL, M.CANCELLED}),
     # A cancelled message may be re-drafted (Email 1 after B3; next unsent step after B5).

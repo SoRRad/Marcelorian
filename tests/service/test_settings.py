@@ -228,3 +228,24 @@ def test_returning_within_default_and_old_windows_needs_no_confirmation(
         )
     with transaction(factory) as s:
         update_settings(s, then, actor=Actor.APPLICANT, now=clock.now())
+
+
+@pytest.mark.parametrize(
+    "signature",
+    ["x" * 2001, "Name\x00", "Name\x1b[0m", "Name\x7f"],
+    ids=["too-long", "nul", "escape", "del"],
+)
+def test_signature_must_be_plain_bounded_text(factory, clock, signature) -> None:
+    with transaction(factory) as s, pytest.raises(SettingsError):
+        update_settings(s, {"email_signature": signature}, actor=Actor.APPLICANT, now=clock.now())
+
+
+def test_signature_keeps_lines_and_normalizes_crlf(factory, clock) -> None:
+    with transaction(factory) as s:
+        update_settings(
+            s,
+            {"email_signature": "A. Applicant, MD\r\nResearch Fellow\tSurgery"},
+            actor=Actor.APPLICANT,
+            now=clock.now(),
+        )
+        assert load_settings(s).email_signature == "A. Applicant, MD\nResearch Fellow\tSurgery"
