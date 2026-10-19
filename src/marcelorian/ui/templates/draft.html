@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/campaigns/{{ campaign.id }}">&larr; Campaign with {{ pi.full_name }}</a></p>
+<section class="card">
+  <h2>{% if step %}Email {{ step }} to {{ pi.full_name }}{% else %}Nothing to draft now{% endif %}</h2>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  {% if not step %}<p>There is no email to draft for this campaign right now. Follow-ups become draftable when they are due.</p>{% else %}
+  <p class="note">The template fills in your confirmed profile answers. Write the personal lines yourself{% if practice %}, or use practice text{% endif %}. Nothing is sent from this page.</p>
+  <form method="post" action="/campaigns/{{ campaign.id }}/draft" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% for key, label in personal_fields.items() %}
+    <label>{{ label }}<textarea name="{{ key }}" rows="2" maxlength="600">{{ personal.get(key, '') }}</textarea></label>
+    {% if sources.get(key) == 'practice' %}<span class="badge warn">practice text — never sent in a real email</span>{% endif %}
+    {% endfor %}
+    {% if preview %}
+    <h3>Preview</h3>
+    <p class="note">Subject: {{ preview.subject }}{% if preview.cv_ids %} · CV attached{% endif %}</p>
+    <pre class="email-preview">{{ message.draft_body if message and message.draft_body else preview.body }}</pre>
+    {% if preview.missing %}<p class="warn-text">Still missing: {{ preview.missing|join(", ") }}.</p>{% endif %}
+    <details><summary>Edit the whole text instead (advanced)</summary>
+      <label class="check"><input type="checkbox" name="edit_body" value="yes"> Use my edited text below</label>
+      <textarea name="body" rows="14">{{ message.draft_body if message and message.draft_body else preview.body }}</textarea>
+      <p class="note">Edited text is checked again but never sent back to an AI. The recipient and subject cannot change.</p>
+    </details>
+    {% endif %}
+    <div class="quick-buttons">
+      <button type="submit" name="action" value="save" class="primary">Save draft and review</button>
+      {% if practice %}<button type="submit" name="action" value="practice">Fill empty lines with practice text</button>{% endif %}
+    </div>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

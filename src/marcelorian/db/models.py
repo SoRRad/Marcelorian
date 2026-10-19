@@ -350,6 +350,8 @@ class Message(Base):
     draft_attachments_json: Mapped[str] = mapped_column(Text, default="[]")
     draft_dependencies_json: Mapped[str] = mapped_column(Text, default="[]")
     draft_test_override_json: Mapped[str | None] = mapped_column(Text)
+    #: Personal lines and their sources (applicant / ai / practice), P2 drafting.
+    draft_fields_json: Mapped[str | None] = mapped_column(Text)
     current_snapshot_id: Mapped[int | None] = mapped_column(
         ForeignKey("approval_snapshot.id", use_alter=True)
     )

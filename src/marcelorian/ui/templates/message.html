@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/campaigns/{{ campaign.id }}">&larr; Campaign with {{ pi.full_name }}</a> · <a href="/approvals">Approvals</a></p>
+<section class="card">
+  <h2>Email {{ message.step }} to {{ pi.full_name }}</h2>
+  <p class="note">{{ institution.name }} · {{ message.mode }} mode · {{ message.state.replace("_", " ") }}</p>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  {% if notice == "approved" %}<p class="near">Approved. Approval never sends: open it in Outlook when the send button unlocks.</p>{% elif notice == "revoked" %}<p class="near">Approval revoked. Edit and approve again when ready.</p>{% endif %}
+  <p>Subject: <strong>{{ message.draft_subject }}</strong></p>
+  <pre class="email-preview">{{ message.draft_body }}</pre>
+  {% if fields.get("body_edited") %}<p class="note">You edited the whole text.</p>{% endif %}
+  {% for key, source in (fields.get("sources") or {}).items() %}{% if source != "applicant" %}<span class="badge warn">{{ key }}: {{ source }}</span> {% endif %}{% endfor %}
+</section>
+
+{% if reviewable %}
+<section class="card">
+  <h2>Checklist</h2>
+  <ul>{% for c in checks %}<li class="{{ '' if c.ok else 'warn-text' }}">{{ "✓" if c.ok else "✗" }} {{ c.label }}{% if c.detail and not c.ok %} — {{ c.detail }}{% endif %}</li>{% endfor %}</ul>
+  <p class="note">These checks confirm structure and sources, not truth. Your review is the final factual check: read the email as the PI will.</p>
+  <div class="quick-buttons">
+    <form method="post" action="/messages/{{ message.id }}/approve"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary" {% if not can_approve %}disabled{% endif %}>Approve</button></form>
+    <a class="button" href="/campaigns/{{ campaign.id }}/draft">Edit draft</a>
+  </div>
+</section>
+{% endif %}
+
+{% if message.state == "approved_queued" %}
+<section class="card" id="send">
+  <h2>Send</h2>
+  {% block send %}{% include "_send.html" ignore missing %}{% endblock %}
+  <form method="post" action="/messages/{{ message.id }}/revoke" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Revoke approval</button></form>
+</section>
+{% endif %}
+
+{% if attempts %}
+<section class="card"><h2>Attempts</h2><ul>{% for a in attempts %}<li>{{ a.channel }} · {{ a.status }} · {{ a.claimed_at.strftime("%Y-%m-%d %H:%M") if a.claimed_at else "" }} UTC</li>{% endfor %}</ul></section>
+{% endif %}
+{% endblock %}

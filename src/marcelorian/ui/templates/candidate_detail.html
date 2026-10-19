@@ -9,7 +9,8 @@
   <ul>{% for e in emails %}<li>{{ e.address }} — confidence {{ e.confidence }}{% if e.ownership_verified %}, ownership verified{% endif %}{% if e.invalid %}, <span class="warn-text">invalid</span>{% endif %}{% if ready and ready.id == e.id %} <span class="badge">send-ready</span>{% endif %}{% if e.verification_evidence %}<br><span class="note">{{ e.verification_evidence }}</span>{% endif %}</li>{% endfor %}</ul>
   {% if dnc %}<p class="alert">On your do-not-contact list.</p>{% endif %}
   {% if busy %}<p class="warn-text">Place in use: {% for c in busy %}campaign #{{ c.id }} ({{ c.state }}){% if not loop.last %}, {% endif %}{% endfor %}. A new application here waits until that place frees.</p>{% endif %}
-  <p class="note">Drafting an email to this person comes in the next step (P2).</p>
+  {% if campaigns %}<p>{% for c in campaigns %}<a href="/campaigns/{{ c.id }}">Campaign ({{ c.mode }}): {{ c.state.replace("_", " ") }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+  {% if ready and not dnc %}<form method="post" action="/candidates/{{ pi.id }}/draft" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary">Draft an email</button></form>{% elif not ready %}<p class="warn-text">No send-ready address: drafting needs one.</p>{% endif %}
 </section>
 
 <section class="card" id="assessment">

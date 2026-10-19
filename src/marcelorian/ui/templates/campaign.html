@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/candidates/{{ pi.id }}">&larr; {{ pi.full_name }}</a></p>
+<section class="card">
+  <h2>Campaign with {{ pi.full_name }}</h2>
+  <p class="note">{{ campaign.mode }} mode · {{ campaign.state.replace("_", " ") }}{% if campaign.close_outcome %} ({{ campaign.close_outcome.replace("_", " ") }}){% endif %}{% if campaign.next_due_at %} · next email due {{ campaign.next_due_at.strftime("%Y-%m-%d") }}{% endif %}</p>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  {% if notice %}<p class="near">{{ notice.replace("_", " ") }}</p>{% endif %}
+  {% if draftable %}<p><a class="button" href="/campaigns/{{ campaign.id }}/draft">Draft Email {{ draftable }}</a></p>{% endif %}
+  <table class="research"><thead><tr><th>Email</th><th>State</th><th>Due</th><th>Sent</th></tr></thead><tbody>
+  {% for m in messages %}<tr><td><a href="/messages/{{ m.id }}">Email {{ m.step }}</a></td><td>{{ m.state.replace("_", " ") }}</td><td>{{ m.due_at.strftime("%Y-%m-%d") if m.due_at else "—" }}</td><td>{{ m.sent_at.strftime("%Y-%m-%d %H:%M") if m.sent_at else "—" }}</td></tr>{% else %}<tr><td colspan="4">No emails yet.</td></tr>{% endfor %}
+  </tbody></table>
+  <div class="quick-buttons">
+    {% if campaign.state == "outreach_pending" and messages and messages[0].state != "sent" %}<form method="post" action="/campaigns/{{ campaign.id }}/cancel"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Cancel Email 1 (not sent yet)</button></form>{% endif %}
+    {% if campaign.state in ("outreach_pending", "paused_review") and not campaign.sequence_stopped %}<form method="post" action="/campaigns/{{ campaign.id }}/stop"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Stop this follow-up sequence</button></form>{% endif %}
+  </div>
+  <p class="note">An email already opened in Outlook cannot be recalled by the app; mark it Sent or Not sent.</p>
+</section>
+{% endblock %}

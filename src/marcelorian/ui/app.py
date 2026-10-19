@@ -46,7 +46,7 @@ from marcelorian.domain.research import (
 )
 from marcelorian.lookups.http import Fetcher, HttpFetcher
 from marcelorian.services import approvals, profile, research_seed, runtime, status
-from marcelorian.ui import routes_contacts, routes_profile
+from marcelorian.ui import routes_contacts, routes_messages, routes_profile
 from marcelorian.ui.context import SLOGAN, UIContext
 from marcelorian.ui.security import SESSION_COOKIE, SecurityMiddleware, UISecurity, UISession
 
@@ -96,6 +96,7 @@ def create_app(
     ui = UIContext(templates, session_factory, clock, current_session, fetcher or HttpFetcher())
     routes_profile.register(app, ui)
     routes_contacts.register(app, ui)
+    routes_messages.register(app, ui)
 
     @app.get("/bootstrap", response_class=HTMLResponse)
     def bootstrap_page(request: Request) -> HTMLResponse:

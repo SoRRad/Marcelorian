@@ -76,6 +76,12 @@ FIELDS: tuple[Field, ...] = (
         FUNDING_CHOICES,
         required=True,
     ),
+    Field(
+        "funding_line",
+        "Funding sentence (optional)",
+        "Added to Email 1 only if you write one. Never mention unpaid work unless you want to.",
+        "long",
+    ),
     Field("subspecialty_interests", "Subspecialty interests", "Leave empty for all."),
     Field("research_interests", "Research interests", kind="long"),
     Field("skills", "Methods and skills you offer", kind="long", required=True),

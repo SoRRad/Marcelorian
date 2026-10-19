@@ -457,3 +457,16 @@ owner's written description of each finding.
     recorded. Sort: grant evidence, fit, address confidence. Skipping hides a
     candidate; do-not-contact adds a live entry for the PI, address and
     identifiers. The place-in-use flag uses the same-place rule (N1).
+43. **Drafting and approval (P2).** Drafts fill the spec §8.1 templates from
+    **confirmed** profile facts and reviewed PI data only; the personal lines
+    are written by the applicant (Claude suggestions are optional, U2), and
+    sandbox offers clearly labelled practice text that the checklist refuses in
+    any real mode. The closing `{signature}` renders the closing name, and the
+    signature block is added at hand-off (S8), so it never appears twice.
+    Empty optional lines (funding line, recent news) are removed; the duration
+    appears only when confirmed. Body templates are editable (unknown
+    placeholders, stray braces and a missing salutation are refused; the
+    subject stays fixed, C5). The deterministic checklist (spec §8.3) runs on
+    the saved text, including whole-body edits, and must pass before Approve;
+    `approvals.approve` then applies its own blockers and the capacity and
+    same-place rules. Approval never sends (S1).
