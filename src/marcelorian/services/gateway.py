@@ -340,7 +340,11 @@ def apply_verdict(
     verdict: Verdict,
     now: datetime,
     evaluated_at: datetime,
+    *,
+    functioning: bool | None = None,
 ) -> DispatchResult:
+    """Record a refusal or deferral; ``functioning`` overrides the B7 evaluation rule
+    (the Outlook hand-off has no mailbox sync, see ``handoff.hand_off``)."""
     if verdict.invalidate and message.state == MessageState.APPROVED_QUEUED.value:
         snapshot = session.get(ApprovalSnapshot, message.current_snapshot_id)
         if snapshot is not None and snapshot.state == SnapshotState.ACTIVE.value:
@@ -366,7 +370,12 @@ def apply_verdict(
     except ValueError:
         reason = verdict.reason
     scheduling.record_evaluation(
-        session, message, evaluated_at, outcome=verdict.outcome.value, reason=reason
+        session,
+        message,
+        evaluated_at,
+        outcome=verdict.outcome.value,
+        reason=reason,
+        functioning=functioning,
     )
     return DispatchResult(verdict.outcome, str(verdict.reason))
 

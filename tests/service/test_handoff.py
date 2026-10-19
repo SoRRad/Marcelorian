@@ -152,7 +152,7 @@ def test_reopening_returns_the_same_email_without_a_second_handoff(outlook: Worl
     first = outlook.hand_off(mid)
     assert first.attempt_uid and first.package
     with transaction(outlook.factory) as s:
-        again = handoff.package_for(s, first.attempt_uid, load_settings(s))
+        again = handoff.package_for(s, first.attempt_uid)
     assert again == first.package
     assert outlook.hand_off(mid).outcome == Outcome.NOT_ELIGIBLE.value
     assert len(outlook.attempts(mid)) == 1
@@ -452,3 +452,62 @@ def test_eml_from_a_real_handoff_parses(outlook: World) -> None:
     assert parsed["Subject"] == "Research Position Application – Ophthalmology"
     attachments = list(parsed.iter_attachments())
     assert [a.get_filename() for a in attachments] == ["cv-synthetic-v1.pdf"]
+
+
+# -- review r5 regressions ----------------------------------------------------------------
+
+
+def test_countdown_never_promises_an_unlock_the_open_handoff_cap_blocks(outlook: World) -> None:
+    mids = [_email1(outlook)[1] for _ in range(4)]
+    for i, mid in enumerate(mids[:3]):
+        assert outlook.hand_off(mid).outcome == "handed_off"
+        if i < 2:
+            outlook.clock.advance(timedelta(minutes=7))
+    outlook.clock.advance(timedelta(seconds=1))  # inside the third hand-off's pacing gap
+    ready = _readiness(outlook, mids[3])
+    assert (ready.reason, ready.unlock_at) == ("too_many_open_handoffs", None)
+
+
+def test_a_click_held_by_the_app_counts_for_the_missed_window_rule(outlook: World) -> None:
+    mids = [_email1(outlook)[1] for _ in range(4)]
+    for mid in mids[:3]:
+        assert outlook.hand_off(mid).outcome == "handed_off"
+        outlook.clock.advance(timedelta(minutes=7))
+    assert outlook.hand_off(mids[3]).reason == "too_many_open_handoffs"
+    outlook.clock.set(ny(2026, 10, 20, 16, 30))  # Tuesday's window is over
+    reconciliation.startup_recovery(outlook.factory, {Mode.LIVE: outlook.gmail}, {}, outlook.clock)
+    # The applicant clicked and the app itself held it (B7): it rolls, no re-approval.
+    assert outlook.message_state(mids[3]) is MessageState.APPROVED_QUEUED
+
+
+def test_window_passing_without_a_click_still_needs_reapproval(outlook: World) -> None:
+    _camp, mid = _email1(outlook)
+    outlook.clock.set(ny(2026, 10, 20, 16, 30))
+    reconciliation.startup_recovery(outlook.factory, {Mode.LIVE: outlook.gmail}, {}, outlook.clock)
+    assert (
+        outlook.message_state(mid) is MessageState.NEEDS_REAPPROVAL
+    )  # note 35, pending S-decision
+
+
+def test_reopened_handoff_keeps_the_signature_it_was_handed_off_with(outlook: World) -> None:
+    outlook.settings(email_signature="A. Applicant")
+    _camp, mid = _email1(outlook)
+    first = outlook.hand_off(mid)
+    assert first.attempt_uid and first.package
+    outlook.settings(email_signature="Dr. Synthetic Applicant\nSynthetic University")
+    with transaction(outlook.factory) as s:
+        assert handoff.package_for(s, first.attempt_uid) == first.package
+    assert first.package.body.endswith("A. Applicant\n")
+
+
+def test_unbuildable_email_records_no_handoff(outlook: World, monkeypatch) -> None:
+    _camp, mid = _email1(outlook)
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("Header values may not contain linefeed or carriage return characters")
+
+    monkeypatch.setattr(handoff, "build_package", broken)
+    result = outlook.hand_off(mid)
+    assert (result.outcome, result.reason) == ("blocked", "email_not_buildable")
+    assert outlook.attempts(mid) == [] and _budget(outlook) == []
+    assert outlook.message_state(mid) is MessageState.NEEDS_REAPPROVAL

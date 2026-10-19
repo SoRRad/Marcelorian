@@ -151,24 +151,15 @@ def test_begin_immediate_serializes_writers(db_path) -> None:
 
 
 def test_send_channel_migration_round_trips(tmp_path) -> None:
-    from alembic import command
-
-    from marcelorian.db.migrate import alembic_config, upgrade
+    from marcelorian.db.migrate import downgrade, upgrade
 
     engine = make_engine(tmp_path / "m.db")
     upgrade(engine, "0001")
     upgrade(engine)
+    downgrade(engine, "0001")
     with engine.connect() as conn:
-        config = alembic_config()
-        config.attributes["connection"] = conn
-        command.downgrade(config, "0001")
-        conn.commit()
-        assert (
-            "handed_off"
-            not in conn.execute(
-                text("select sql from sqlite_master where name = 'send_attempt'")
-            ).scalar_one()
-        )
+        ddl = conn.execute(text("select sql from sqlite_master where name = 'send_attempt'"))
+        assert "handed_off" not in ddl.scalar_one()
     upgrade(engine)
     with engine.connect() as conn:
         ddl = conn.execute(text("select sql from sqlite_master where name = 'send_attempt'"))

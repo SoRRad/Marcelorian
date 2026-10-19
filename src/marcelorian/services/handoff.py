@@ -18,6 +18,7 @@ Send in Outlook is outside the app's control (spec §9.8).
 
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -26,7 +27,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from marcelorian.config.settings import AppSettings
-from marcelorian.db.models import ApprovalSnapshot, Blob, Campaign, Message, SendAttempt
+from marcelorian.db.models import (
+    ApprovalSnapshot,
+    AuditEvent,
+    Blob,
+    Campaign,
+    Message,
+    SendAttempt,
+)
 from marcelorian.domain.enums import (
     Actor,
     AttemptStatus,
@@ -208,8 +216,11 @@ def readiness(
         _required_confirmation(message, None) if channel is Channel.OUTLOOK_HANDOFF else None
     )
     verdict = final_checks(session, message, settings, now, preflight_started=None, channel=channel)
-    if verdict is None and channel is Channel.OUTLOOK_HANDOFF:
-        verdict = _hold(session, message)
+    timed = verdict is not None and verdict.outcome is Outcome.DEFERRED and verdict.reason in _TIMED
+    if channel is Channel.OUTLOOK_HANDOFF and (verdict is None or timed):
+        # A hold no clock ends (three open hand-offs, an unresolved attempt to this
+        # person) wins over a countdown, which would otherwise promise a false unlock.
+        verdict = _hold(session, message) or verdict
     if verdict is None:
         return Readiness(True, None, now, confirmation)
     reason = str(verdict.reason)
@@ -282,11 +293,22 @@ def hand_off(
     )
     if verdict is None:
         verdict = _hold(session, message)
-    if verdict is not None:
-        result = apply_verdict(session, message, verdict, now, now)
-        return HandoffResult(result.outcome.value, result.reason)
     snapshot = _active_snapshot(session, message)
-    content = verify_canonical(snapshot.canonical_json, snapshot.sha256)
+    package: HandoffPackage | None = None
+    if verdict is None:
+        content = verify_canonical(snapshot.canonical_json, snapshot.sha256)
+        signature = settings.email_signature
+        try:  # built before anything is recorded, so a failure leaves no hand-off
+            package = build_package(content, _attachment_bytes(session, content), signature)
+        except (ValueError, SnapshotError):
+            verdict = Verdict(Outcome.BLOCKED, "email_not_buildable", invalidate=True)
+    if verdict is not None:
+        # The click itself proves the app was running: a deliberate hold (pacing, budget,
+        # capacity, open hand-offs) is a functioning evaluation for the B7 rule, as a
+        # Gmail evaluation with a current sync is; no mailbox sync exists here.
+        result = apply_verdict(session, message, verdict, now, now, functioning=True)
+        return HandoffResult(result.outcome.value, result.reason)
+    assert package is not None
     attempt = SendAttempt(
         attempt_uid=opaque_token(),
         message_id=message.id,
@@ -337,24 +359,31 @@ def hand_off(
             "snapshot_sha256": snapshot.sha256,
             "confirmed": ("prior_contact_checked" if message.step == 1 else "no_reply"),
             "searched_addresses": list(addresses_to_search(session, message)),
+            # Reopening rebuilds the identical email even if the setting changes later.
+            "signature": signature,
         },
         mode=message.mode,
     )
-    return HandoffResult(
-        HANDED_OFF,
-        None,
-        attempt.attempt_uid,
-        build_package(content, _attachment_bytes(session, content), settings.email_signature),
-    )
+    return HandoffResult(HANDED_OFF, None, attempt.attempt_uid, package)
 
 
-def package_for(session: Session, attempt_uid: str, settings: AppSettings) -> HandoffPackage:
+def package_for(session: Session, attempt_uid: str) -> HandoffPackage:
     """Reopen an unresolved hand-off: the same email, never a second hand-off."""
     attempt = _handed_off(session, attempt_uid)
     snapshot = session.get(ApprovalSnapshot, attempt.snapshot_id)
     assert snapshot is not None
     content = verify_canonical(snapshot.canonical_json, snapshot.sha256)
-    return build_package(content, _attachment_bytes(session, content), settings.email_signature)
+    event = session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.entity_type == "send_attempt",
+            AuditEvent.entity_id == str(attempt.id),
+            AuditEvent.action == HANDED_OFF,
+        )
+    )
+    if event is None or not event.detail_json:
+        raise HandoffError("the hand-off record is missing")
+    signature = str(json.loads(event.detail_json).get("signature", ""))
+    return build_package(content, _attachment_bytes(session, content), signature)
 
 
 def record_sent(

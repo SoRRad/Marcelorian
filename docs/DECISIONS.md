@@ -355,7 +355,22 @@ owner's written description of each finding.
     hand-off's audit entry. The `.eml` builder writes plain text UTF-8, no
     From/Date/Message-ID headers, and refuses CR/LF or control characters in
     header values. The compose link is built only when the full URL fits
-    2,000 characters. Missed-window handling is unchanged for now: an approved
-    message whose window passes without a click follows the B7 rule (with no
-    worker evaluations that means re-approval); owner decision pending on
-    rolling instead.
+    2,000 characters. The email is built before anything is recorded (a build
+    failure is `email_not_buildable` with no hand-off), and the signature used
+    is stored with the hand-off so reopening returns the identical email.
+    Missed-window handling: a hand-off click the app itself holds (pacing,
+    budget, capacity, three open hand-offs, an unresolved attempt) is recorded
+    as a functioning evaluation, so that window rolls as a Gmail deferral with
+    a current sync would; a window that passes with **no click** follows the
+    B7 rule and needs re-approval (owner decision pending on rolling instead).
+    The countdown never shows a time while a hold no clock ends applies.
+    **Not sent is final** (no correction to Sent): the P2 screen must ask for
+    confirmation before recording it, since a re-approved message can be
+    handed off again.
+36. **Migrations on existing data.** Batch table rebuilds (copy, drop, rename)
+    fail with foreign keys enforced once other rows reference the table, so
+    `db.migrate` runs every upgrade and downgrade with foreign keys off for
+    that connection (set before the transaction), runs
+    `PRAGMA foreign_key_check` before committing (any violation rolls back),
+    and turns enforcement back on. Tested on a populated 0001 database
+    (`tests/db/test_migration_data.py`).
