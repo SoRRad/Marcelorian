@@ -65,6 +65,8 @@ _EMAIL_LEVEL = {
     "not_published_or_not_reverified": "unverified",
     "missing": "none",
 }
+#: A "confirmed current" check returns to the queue after this many days (owner, R3).
+CONFIRMATION_VALID_DAYS = 90
 FRESHNESS = ("recent", "aging", "stale", "unknown")
 RECENT_DAYS = 30
 AGING_DAYS = 180
@@ -87,6 +89,8 @@ class Facts:
     evidence_count: int
     hiring_authority: str = ""
     freshness: str = "unknown"
+    local_verified_on: date | None = None
+    confirmation_expired: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,12 @@ def person_level(facts: Facts) -> tuple[str, str]:
     if facts.local_verification in BLOCKING_VERIFICATIONS:
         return "blocked", LOCAL_VERIFICATIONS[facts.local_verification]
     if facts.local_verification == "confirmed_current":
+        if facts.confirmation_expired:
+            when = facts.local_verified_on.isoformat() if facts.local_verified_on else "earlier"
+            return "source_checked", (
+                f"You confirmed this on {when}, over {CONFIRMATION_VALID_DAYS} days ago: "
+                "confirm again"
+            )
         return "confirmed", LOCAL_VERIFICATIONS["confirmed_current"]
     if facts.role_status == "official_source_checked":
         return "source_checked", "Role observed on an official source (seed)"
@@ -175,6 +185,49 @@ def warnings(facts: Facts) -> list[str]:
     if facts.record_type == "contact" and facts.hiring_authority in {"", "not_established"}:
         found.append("Hiring authority not established")
     return found
+
+
+def confirmation_expired(verification: str, verified_on: date | None, today: date) -> bool:
+    """A confirmation without a date, or older than the limit, has expired."""
+    if verification != "confirmed_current":
+        return False
+    return verified_on is None or (today - verified_on).days > CONFIRMATION_VALID_DAYS
+
+
+# --------------------------------------------------------------------------- #
+# Verification queue order (owner, R2: most sendable first)
+# --------------------------------------------------------------------------- #
+
+QUEUE_TIERS: dict[int, str] = {
+    1: "Faculty with role and email seen on an official source",
+    2: "Partial evidence",
+    3: "Opportunities and program routes",
+    4: "Claims only (publication authors, research contacts, no address)",
+}
+
+
+def queue_tier(facts: Facts) -> int:
+    if facts.record_type == "opportunity" or facts.contact_kind in {
+        "program_contact",
+        "shared_mailbox",
+    }:
+        return 3
+    email = _EMAIL_LEVEL.get(facts.email_status, "unverified") if facts.email else "none"
+    official_role = facts.role_status == "official_source_checked"
+    if (
+        official_role
+        and email == "source_checked"
+        and not facts.email_is_shared
+        and facts.contact_kind not in {"author_unverified", "research_contact_unverified"}
+    ):
+        return 1
+    if facts.email and (
+        official_role
+        or email in {"source_checked", "partial"}
+        or facts.verification_status == "partial_evidence"
+    ):
+        return 2
+    return 4
 
 
 def freshness(observed_on: date | None, today: date) -> str:

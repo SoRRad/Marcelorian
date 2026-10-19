@@ -27,3 +27,13 @@ td.wrap { white-space: pre-wrap; word-break: break-word; }
 .level-source_checked { color: var(--accent); }
 .level-partial, .level-unverified { color: var(--warn); }
 .level-none, .level-blocked { color: #f85149; }
+a.button { display: inline-block; border: 1px solid var(--accent); border-radius: 6px; padding: 0.4rem 0.9rem; text-decoration: none; margin-right: 0.5rem; }
+.tiers a { display: inline-block; margin: 0.2rem 0.8rem 0.2rem 0; }
+.tiers a.current { font-weight: 600; text-decoration: none; border-bottom: 2px solid var(--accent); }
+.queue-reason { color: var(--warn); font-weight: 600; }
+.quick { display: flex; flex-direction: column; gap: 0.6rem; }
+.quick label { display: flex; flex-direction: column; font-size: 0.85rem; color: var(--muted); max-width: 40rem; }
+.quick-buttons { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; align-items: center; }
+.quick-buttons form { display: inline; }
+button.primary { background: var(--accent); color: var(--bg); font-weight: 600; }
+form.inline { margin-top: 0.8rem; }

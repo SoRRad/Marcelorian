@@ -34,6 +34,7 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from marcelorian.db.models import (
+    AuditEvent,
     Campaign,
     DoNotContact,
     Pi,
@@ -44,17 +45,22 @@ from marcelorian.db.models import (
     ResearchRecord,
     SeedImport,
 )
-from marcelorian.domain.enums import Actor
+from marcelorian.domain.enums import Actor, Mode
 from marcelorian.domain.research import (
     AGING_DAYS,
+    BLOCKING_VERIFICATIONS,
+    CONFIRMATION_VALID_DAYS,
     LOCAL_STATUSES,
     LOCAL_VERIFICATIONS,
+    QUEUE_TIERS,
     RECENT_DAYS,
     Confidence,
     Facts,
     confidence,
+    confirmation_expired,
     freshness,
     parse_iso,
+    queue_tier,
 )
 from marcelorian.domain.scholarly_ids import (
     IdentifierError,
@@ -65,6 +71,7 @@ from marcelorian.domain.seed import COLUMNS, SCHEMA_VERSION, ParsedSeed, RowErro
 from marcelorian.domain.seed import dangling_references as _dangling
 from marcelorian.services.audit import audit
 
+SOURCE_REQUIRED = "Say where you checked (a URL or a short note) before confirming."
 CATEGORIES = ("new", "unchanged", "changed", "conflicting", "excluded", "invalid")
 MAX_LOCAL_TEXT = 2000
 
@@ -351,15 +358,30 @@ def set_local_review(
     note: str,
     now: datetime,
     actor: Actor | str = Actor.APPLICANT,
+    reconfirm: bool = False,
 ) -> ResearchRecord:
+    """Save the applicant's finding. A confirmation must say where it was checked.
+
+    The finding's date (``local_verified_at``) moves when the finding changes, when an
+    expired confirmation is saved again, or on an explicit re-confirmation.
+    """
     if status not in LOCAL_STATUSES:
         raise ValueError(f"unknown local status: {status}")
     if verification not in LOCAL_VERIFICATIONS:
         raise ValueError(f"unknown verification: {verification}")
+    if verification == "confirmed_current" and not source.strip():
+        raise ValueError(SOURCE_REQUIRED)
     record = session.get(ResearchRecord, record_id)
     if record is None:
         raise LookupError(record_id)
     before = record.local_verification
+    verified_on = record.local_verified_at.date() if record.local_verified_at else None
+    if (
+        verification != before
+        or reconfirm
+        or confirmation_expired(verification, verified_on, now.date())
+    ):
+        record.local_verified_at = now if verification != "unchecked" else None
     record.local_status = status
     record.local_verification = verification
     record.local_verification_source = source.strip()[:MAX_LOCAL_TEXT] or None
@@ -375,9 +397,174 @@ def set_local_review(
         action="research_local_review",
         from_state=before,
         to_state=verification,
-        detail={"local_status": status},
+        detail={"local_status": status, "reconfirm": reconfirm},
     )
     return record
+
+
+def quick_finding(
+    session: Session,
+    record_id: int,
+    *,
+    verification: str,
+    source: str,
+    note: str,
+    now: datetime,
+    actor: Actor | str = Actor.APPLICANT,
+) -> ResearchRecord:
+    """The queue's one-click finding: keeps triage, adds the note to any earlier one."""
+    record = session.get(ResearchRecord, record_id)
+    if record is None:
+        raise LookupError(record_id)
+    notes = [n for n in (record.local_note, note.strip()) if n]
+    return set_local_review(
+        session,
+        record_id,
+        status=record.local_status,
+        verification=verification,
+        source=source or (record.local_verification_source or ""),
+        note="\n".join(notes),
+        now=now,
+        actor=actor,
+        reconfirm=verification == "confirmed_current",
+    )
+
+
+def reopen(
+    session: Session, record_id: int, *, now: datetime, actor: Actor | str = Actor.APPLICANT
+) -> ResearchRecord:
+    """Lift a negative finding (owner, R1). The old finding stays in the audit history."""
+    record = session.get(ResearchRecord, record_id)
+    if record is None:
+        raise LookupError(record_id)
+    if record.local_verification not in BLOCKING_VERIFICATIONS:
+        raise ValueError("only a negative finding can be reopened")
+    before = record.local_verification
+    record.local_verification = "unchecked"
+    record.local_verified_at = None
+    record.local_updated_at = now
+    record.rereview_reason = None
+    audit(
+        session,
+        at=now,
+        actor=actor,
+        entity_type="research_record",
+        entity_id=record.id,
+        action="research_reopened",
+        from_state=before,
+        to_state="unchecked",
+        detail={"previous_source": record.local_verification_source or ""},
+    )
+    return record
+
+
+def history(session: Session, record: ResearchRecord) -> list[AuditEvent]:
+    return list(
+        session.scalars(
+            select(AuditEvent)
+            .where(
+                AuditEvent.entity_type == "research_record",
+                AuditEvent.entity_id == str(record.id),
+            )
+            .order_by(AuditEvent.at.desc(), AuditEvent.id.desc())
+        )
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Verification queue (owner, R2/R4: most sendable first, one record at a time)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class QueueItem:
+    record: ResearchRecord
+    confidence: Confidence
+    tier: int
+    reason: str
+
+
+def queue(session: Session, today: date, tier: int | None = None) -> list[QueueItem]:
+    """Records that need the applicant's check, most sendable first.
+
+    In the queue: records not checked yet (unless set aside), expired confirmations,
+    and records the seed changed since the applicant's check (including negative
+    findings with new evidence, which can be reopened). Never in it: out-of-scope
+    records and records matching a live do-not-contact entry.
+    """
+    blocked = _dnc_keys(session)
+    items: list[tuple[tuple[Any, ...], QueueItem]] = []
+    for record in session.scalars(select(ResearchRecord)):
+        if record.excluded_reason or _matches_dnc(record, blocked):
+            continue
+        facts = facts_for(record, today)
+        reason = _queue_reason(record, facts)
+        if reason is None:
+            continue
+        item_tier = queue_tier(facts)
+        if tier is not None and item_tier != tier:
+            continue
+        flagged = 0 if reason != NOT_CHECKED else 1
+        key = (
+            item_tier,
+            flagged,
+            record.priority_band is None,
+            record.priority_band or 0,
+            record.institution_key,
+            record.name,
+            record.id,
+        )
+        items.append((key, QueueItem(record, confidence(facts), item_tier, reason)))
+    return [item for _key, item in sorted(items, key=lambda pair: pair[0])]
+
+
+NOT_CHECKED = "Not checked yet"
+
+
+def _queue_reason(record: ResearchRecord, facts: Facts) -> str | None:
+    if record.rereview_reason:
+        if record.local_verification in BLOCKING_VERIFICATIONS:
+            return "New evidence since your finding: keep it or reopen"
+        return "The seed changed since your check"
+    if facts.confirmation_expired:
+        return f"Confirm again (your check is over {CONFIRMATION_VALID_DAYS} days old)"
+    if record.local_verification == "unchecked" and record.local_status != "set_aside":
+        return NOT_CHECKED
+    return None
+
+
+def queue_counts(items: list[QueueItem]) -> dict[int, int]:
+    counts = dict.fromkeys(QUEUE_TIERS, 0)
+    for item in items:
+        counts[item.tier] += 1
+    return counts
+
+
+def _dnc_keys(session: Session) -> tuple[set[str], set[str], set[str]]:
+    emails: set[str] = set()
+    orcids: set[str] = set()
+    openalex: set[str] = set()
+    for entry in session.scalars(
+        select(DoNotContact).where(DoNotContact.scope_mode == Mode.LIVE.value)
+    ):
+        if entry.email:
+            emails.add(entry.email.lower())
+        if entry.orcid:
+            orcids.add(entry.orcid)
+        if entry.openalex_id:
+            openalex.add(entry.openalex_id)
+    return emails, orcids, openalex
+
+
+def _matches_dnc(record: ResearchRecord, keys: tuple[set[str], set[str], set[str]]) -> bool:
+    emails, orcids, openalex = keys
+    if not (emails or orcids or openalex):
+        return False
+    if record.email and record.email.strip().lower() in emails:
+        return True
+    orcid = _canonical(canonical_orcid, record_orcid(record))
+    oa = _canonical(canonical_openalex_author_id, record_value(record, "openalex_id"))
+    return (orcid is not None and orcid in orcids) or (oa is not None and oa in openalex)
 
 
 # --------------------------------------------------------------------------- #
@@ -408,6 +595,7 @@ class Row:
 
 
 def facts_for(record: ResearchRecord, today: date) -> Facts:
+    verified_on = record.local_verified_at.date() if record.local_verified_at else None
     details: dict[str, Any] = {}
     try:
         raw = json.loads(record.raw_json)
@@ -429,6 +617,8 @@ def facts_for(record: ResearchRecord, today: date) -> Facts:
         evidence_count=record.evidence_count,
         hiring_authority=str(details.get("hiring_authority") or ""),
         freshness=freshness(parse_iso(record.freshness_date), today),
+        local_verified_on=verified_on,
+        confirmation_expired=confirmation_expired(record.local_verification, verified_on, today),
     )
 
 

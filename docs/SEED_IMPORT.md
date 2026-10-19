@@ -119,6 +119,38 @@ postdoc), emeritus, "known only as a publication author", program or shared-mail
 routes, publication-sourced addresses, no observed evidence, stale or unknown
 freshness, and hiring authority not established.
 
+## Verification queue (owner decisions R1–R4)
+
+`/research/queue` shows one record at a time, most sendable first:
+
+1. Faculty or investigators whose role **and** email were both seen on an official source.
+2. Partial evidence: an address from a publication or secondary directory, or a role not
+   yet seen on an official page.
+3. Opportunities and program routes (program contacts, shared mailboxes).
+4. Claims only: publication authors and research contacts without an observed address.
+
+Within a tier, flagged records come first, then the seed's priority band, then the
+institution, so neighbours on one faculty page tend to come together. Out-of-scope
+records and records matching a **live** do-not-contact entry are never queued.
+
+In the queue:
+
+* records not checked yet (unless you set them aside);
+* confirmations older than **90 days** ("confirm again"). An expired confirmation counts
+  as "Official source seen" until you confirm again;
+* records the seed changed since your check. A negative finding is **never lifted
+  automatically**: it shows "new evidence since your finding", and you either keep it
+  (click the same finding) or **Reopen** it back to "not checked". The old finding stays
+  in the record's history.
+
+The quick buttons save your finding and move to the next record:
+Confirmed current, fellow or trainee, left, not faculty, retired or emeritus, wrong person.
+**Confirming requires saying where you checked** (a URL or a short note), in the queue and
+on the record page. Saving the same confirmation again from the record page does not
+extend it; the queue's "Confirmed current" button is an explicit re-confirmation.
+Migration `0004` adds `research_record.local_verified_at` (when the current finding
+was made). Existing findings take the time they were last saved.
+
 ## Semantics carried over
 
 * Contacts and opportunities are separate record types. A program, shared mailbox or
