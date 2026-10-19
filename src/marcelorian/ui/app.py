@@ -70,6 +70,7 @@ from marcelorian.ui import (
     routes_data,
     routes_messages,
     routes_profile,
+    routes_seed,
     routes_send,
     routes_settings,
 )
@@ -174,6 +175,7 @@ def create_app(
     routes_send.register(app, ui)
     routes_settings.register(app, ui)
     routes_data.register(app, ui)
+    routes_seed.register(app, ui)
 
     @app.get("/api/notices")
     def api_notices() -> JSONResponse:
@@ -522,7 +524,7 @@ def _setup_checklist(
         ("Upload your CV", bool(profile.cv_versions(db, me.id)), "/profile#cv"),
         ("Set up your signature", settings.signature_step_done, "/profile#signature"),
         ("Add your Outlook address", approvals._active_mailbox(db) is not None, "/profile#outlook"),
-        ("Import a research seed", research_total > 0, "/research"),
+        ("Import your lead list", research_total > 0, "/research"),
     ]
 
 

@@ -1,0 +1,80 @@
+# Marcelorian packaging (owner decision N5): the no-install Windows zip for testers.
+#
+# * Manual runs only. "publish" off: the zip is a workflow artifact (private to the repo's
+#   collaborators). "publish" on: it is attached to a GitHub pre-release (a public link).
+# * Python comes from actions/setup-python at an exact version; every dependency is
+#   installed from the hash-checked runtime lock. No secrets are used; the release job
+#   alone gets contents: write, through the built-in token.
+name: Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label, for example v0.1.0-pilot"
+        required: true
+      publish:
+        description: "Publish as a GitHub pre-release (public download link)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build Windows zip
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12.10"
+      - name: Pinned pip
+        run: python -m pip install --upgrade "pip==25.2"
+      - name: Build and self-test
+        shell: bash
+        run: python packaging/build_zip.py --version "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: marcelorian-${{ inputs.version }}-windows
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: publish pre-release
+    needs: build
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: marcelorian-${{ inputs.version }}-windows
+          path: dist
+      - name: Create the pre-release
+        run: |
+          gh release create "$VERSION" dist/* \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Marcelorian $VERSION (pilot test build)" \
+            --notes-file packaging/RELEASE_NOTES.md

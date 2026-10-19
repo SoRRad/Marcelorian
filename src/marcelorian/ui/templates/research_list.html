@@ -5,7 +5,13 @@
   <h2>Research catalog</h2>
   <p><a class="button" href="/research/queue">Open the verification queue ({{ queue_total }} to check)</a></p>
   <p class="note">These are research leads, not recipients. Nothing here is approved to send, and the seed cannot tell whether you have contacted anyone before. Every person and address must be checked by you before an email is drafted.</p>
-  {% if last_import %}<p class="note">Last import: {{ last_import.source_name }}, snapshot {{ last_import.snapshot_date }} (#{{ last_import.id }}).</p>{% else %}<p class="note">Nothing imported yet. Run <code>python -m marcelorian.tools.seed_import &lt;file&gt;</code> (dry run), then add <code>--commit</code>.</p>{% endif %}
+  {% if request.query_params.get("error") %}<p class="alert">{{ request.query_params.get("error") }}</p>{% endif %}
+  {% if request.query_params.get("notice") %}<p class="near">{{ request.query_params.get("notice") }}</p>{% endif %}
+  {% if last_import %}<p class="note">Last import: {{ last_import.source_name }}, snapshot {{ last_import.snapshot_date }} (#{{ last_import.id }}).</p>{% else %}<p class="note">Nothing imported yet. Choose your lead list (.csv) below.</p>{% endif %}
+  <form method="post" action="/research/import" enctype="multipart/form-data" data-upload class="inline-buttons">
+    <label>Import a lead list (.csv) <input type="file" name="file" accept=".csv,text/csv" required></label>
+    <button type="submit">Check the file</button>
+  </form>
   <form method="get" action="/research" class="filters">
     <label>Type <select name="record_type"><option value="">any</option>{% for v in options.record_type %}<option value="{{ v }}" {% if chosen.record_type == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
     <label>Review lane <select name="review_lane"><option value="">any</option>{% for v in options.review_lane %}<option value="{{ v }}" {% if chosen.review_lane == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>

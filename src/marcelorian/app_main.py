@@ -83,7 +83,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Start Marcelorian.")
     parser.add_argument("--data-dir", type=Path, default=None, help="default: the app data folder")
     parser.add_argument("--no-browser", action="store_true", help="do not open the browser")
+    parser.add_argument(
+        "--self-test", action="store_true", help="check this copy works, then exit (packaging)"
+    )
     args = parser.parse_args(argv)
+    if args.self_test:
+        return self_test()
 
     resolved = resolve_app_paths()
     data_dir: Path = args.data_dir or resolved.data_dir
@@ -121,6 +126,27 @@ def main(argv: list[str] | None = None) -> int:
         return code
     finally:
         lock.release()
+
+
+def self_test() -> int:
+    """Build a throwaway database and app and run one worker cycle; nothing is kept."""
+    import tempfile
+
+    import anthropic  # noqa: F401 - optional Claude support must be importable
+
+    from marcelorian.config.specialty import load_specialty
+
+    with tempfile.TemporaryDirectory(prefix="marcelorian-selftest-") as tmp:
+        clock = SystemClock()
+        factory = prepare_database(Path(tmp) / "marcelorian.db", clock)
+        app = create_app(UISecurity(HOST, free_port(), clock), factory, clock)
+        result = worker_of(app).cycle()
+        factory.kw["bind"].dispose()
+    if result is None:
+        print("Self-test failed: the background check did not run.")
+        return 1
+    print(f"Self-test passed ({load_specialty().display_name}).")
+    return 0
 
 
 def _stop(holder: dict[str, Any]) -> None:

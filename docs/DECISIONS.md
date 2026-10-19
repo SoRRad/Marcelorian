@@ -567,3 +567,19 @@ owner's written description of each finding.
     database with WAL/SHM, staged restore, backups, logs and the exports folder,
     then prints what remains outside the app. An interrupted deletion finishes
     at the next start. Gmail/Sheet steps of spec §14 do not apply (U3, U4).
+49. **Tester package (P5, N5) and in-app lead import.** The tester gets a
+    no-install zip from a GitHub (pre-)release: `Start Marcelorian.bat`, the
+    plain-language guide (`docs/TESTER_GUIDE.md`) and a private Python copy.
+    The `Package` workflow (manual) takes Python 3.12.10 from
+    `actions/setup-python` (no unverified download), installs dependencies from
+    `requirements/runtime-windows.txt` (hash-checked, wheels only; pins equal
+    the dev lock, tested), copies the app, runs `--self-test` from the packaged
+    copy, zips it with a `.sha256`, and publishes a pre-release only when asked;
+    only that job gets `contents: write`. The launcher runs Python with `-I`, so
+    the tester's other Python installs and variables cannot interfere. Data stays
+    in `%LOCALAPPDATA%\Marcelorian`, so a new version carries it over (backed up
+    before any database update). CI builds and self-tests the zip on Windows for
+    every pull request. Because testers cannot use a command line, the lead list
+    is imported from the Research page (upload → preview with the same
+    whole-file validation → import, or cancel); it stays local and offline, and
+    still only stages research leads.

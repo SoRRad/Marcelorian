@@ -3,25 +3,27 @@
 *May the Force Hire You*
 
 A Windows desktop pilot that helps one applicant find US ophthalmology
-principal investigators and manage a 4-email outreach sequence through the
-applicant's own Gmail. Every email is approved individually by the applicant.
-AI researches and drafts; ordinary tested code controls approval, sending,
-follow-ups, limits and stopping.
+principal investigators and manage a 4-email outreach sequence. Every email is
+approved individually, and the applicant presses Send in Outlook (the pilot's
+only channel). Ordinary tested code controls approval, follow-ups, limits and
+stopping; Claude suggestions for the personal lines are optional.
 
+- **Testers:** [How to use Marcelorian](docs/TESTER_GUIDE.md) (also inside the zip)
+- **Program owner:** [Build the tester zip and follow the pilot](docs/OWNER_SETUP.md)
 - Specification: [`MARCELORIAN_SPEC.md`](MARCELORIAN_SPEC.md) (single source of rules)
-- Decisions after the v2 review: [`docs/DECISIONS.md`](docs/DECISIONS.md)
+- Decisions: [`docs/DECISIONS.md`](docs/DECISIONS.md)
 
 ## Status
 
-Phase **P0.1–P0.2** (safe foundation): settings, database and migrations, OS
-credential store, local UI session security, and the sending safety core
-(approval snapshots, reservations and caps, the 24-hour budget, pacing,
-windows and due dates, the single send gateway with atomic claim,
-reconciliation and the uncertain state). Real Gmail is **not** connected yet;
-the P0.3 Windows transport test needs separate owner authorization
-([runbook](docs/P0_3_WINDOWS_RUNBOOK.md)).
+Pilot build (P0–P5): profile and CV, lead list import and verification, free
+PubMed/OpenAlex/NIH lookups, candidates, drafting with a deterministic
+checklist, approval, Outlook hand-off, practice mode with simulated replies,
+reply tags and tasks, a background worker with notices, owner exports,
+backups/restore, delete-all-data, and a no-install Windows zip.
 
-Nothing in this phase sends email, contacts a PI, or calls a paid API.
+The app never sends email by itself and never contacts a PI on its own. Live
+mode needs the real Outlook test on the tester's computer first
+([runbook](docs/P0_3_WINDOWS_RUNBOOK.md)).
 
 ## Development
 
@@ -36,12 +38,14 @@ python -m venv .venv
 .venv/bin/mypy
 ```
 
-Tests use a fake Gmail transport, an injected clock and temporary SQLite
-databases. They never use the network.
+Run the app with `python -m marcelorian`. Tests use fake transports and
+clients, an injected clock and temporary SQLite databases; they never use the
+network or spend API credit.
 
 ## Privacy note
 
 Local data lives in an unencrypted SQLite database under
 `%LOCALAPPDATA%\Marcelorian\`, which Windows or OneDrive backup may copy.
-Secrets are kept only in Windows Credential Manager. Use of Google user data
-will follow Google's API Services User Data Policy (Limited Use).
+Secrets (the optional Claude key) are kept only in Windows Credential Manager.
+When Claude suggestions are on, the PI's public publication titles and selected
+profile answers are sent to Anthropic, so not all data stays on the laptop then.
