@@ -257,7 +257,7 @@ def test_identity_closure_follows_chains_but_never_name_and_institution(world) -
     assert "chain.c@synthetic-other.test" in person.addresses
 
 
-# -- missed-window rule (§9.4; B7, note 3, note 16) ---------------------------------------------
+# -- missed-window rule (§9.4; S7 replaced B7's re-approval) -------------------------------------
 
 
 def test_corrupted_snapshot_is_contained_per_message(factory) -> None:
@@ -270,15 +270,13 @@ def test_corrupted_snapshot_is_contained_per_message(factory) -> None:
     world.clock.set(resolve_local(datetime(2026, 10, 20, 11, 5), NY))  # whole window missed
     with transaction(world.factory) as s:
         actions = dict(scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s)))
-    assert actions == {bad: "needs_reapproval", good: "needs_reapproval"}
+    assert actions == {bad: "needs_reapproval", good: "rolled"}
     with transaction(world.factory) as s:
         assert s.get(ApprovalSnapshot, s.get(Message, bad).current_snapshot_id).end_reason == (
             "snapshot_invalid"
         )
-        # The healthy one went to review on its own merits, not as collateral.
-        assert s.get(ApprovalSnapshot, s.get(Message, good).current_snapshot_id).end_reason == (
-            "missed_window"
-        )
+        # The healthy one simply waits for its next window, untouched by the bad one.
+        assert s.get(ApprovalSnapshot, s.get(Message, good).current_snapshot_id).state == "active"
 
 
 def test_damaged_snapshot_does_not_affect_a_considered_message(factory) -> None:
@@ -302,7 +300,7 @@ def test_damaged_snapshot_does_not_affect_a_considered_message(factory) -> None:
     assert message.eligible_window_start == resolve_local(datetime(2026, 10, 21, 8, 0), NY)
 
 
-def test_cap_deferral_without_a_current_sync_is_not_functioning(factory) -> None:
+def test_cap_deferral_without_a_current_sync_is_recorded_not_functioning(factory) -> None:
     world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
     world.narrow_window()
     world.connect_mailbox()
@@ -320,11 +318,11 @@ def test_cap_deferral_without_a_current_sync_is_not_functioning(factory) -> None
                 select(DispatchEvaluation.functioning).where(DispatchEvaluation.message_id == mid)
             )
         )
-    assert flags == [False, False, False]
+    assert flags == [False, False, False]  # the audit flag; it no longer decides anything
     world.clock.set(resolve_local(datetime(2026, 10, 20, 11, 5), NY))
     with transaction(world.factory) as s:
         actions = scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s))
-    assert actions == [(mid, "needs_reapproval")]
+    assert actions == [(mid, "rolled")]  # S7: the approval waits
 
 
 @pytest.mark.parametrize(

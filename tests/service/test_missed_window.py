@@ -1,4 +1,4 @@
-"""Missed-window rule (acceptance 17; decision B7)."""
+"""Missed-window rule (acceptance 17; owner decision S7: an unsent window rolls, no re-approval)."""
 
 from __future__ import annotations
 
@@ -45,26 +45,6 @@ def apply_rule(world):
         return scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s))
 
 
-def test_worker_asleep_through_window_requires_reapproval(queued) -> None:
-    world, camp, mid = queued
-    world.clock.set(at(20, 11, 5))
-    assert apply_rule(world) == [(mid, "needs_reapproval")]
-    assert world.message_state(mid) is MessageState.NEEDS_REAPPROVAL
-    assert world.campaign_row(camp).state == CampaignState.PAUSED_REVIEW.value
-    assert world.dispatch(mid).outcome is Outcome.NOT_ELIGIBLE
-
-
-def test_missing_evidence_is_not_fabricated_as_success(queued) -> None:
-    world, _camp, mid = queued
-    world.clock.set(at(20, 9))
-    with transaction(world.factory) as s:  # a heartbeat is not dispatch evidence
-        from marcelorian.db.models import WorkerHeartbeat
-
-        s.add(WorkerHeartbeat(at=world.clock.now(), component="tray"))
-    world.clock.set(at(20, 11))
-    assert apply_rule(world) == [(mid, "needs_reapproval")]
-
-
 def test_functioning_deferral_in_window_rolls_to_next_window(queued) -> None:
     world, _camp, mid = queued
     world.settings(real_submissions_per_24h=25)
@@ -80,24 +60,6 @@ def test_functioning_deferral_in_window_rolls_to_next_window(queued) -> None:
     message = world.message(mid)
     assert message.state == MessageState.APPROVED_QUEUED.value
     assert (message.eligible_window_start, message.eligible_window_end) == (at(21, 8), at(21, 11))
-
-
-def test_only_non_functioning_evaluations_mean_unavailable(queued) -> None:
-    world, _camp, mid = queued
-    world.connect_mailbox()
-    # Sandbox sync cannot fail, so model connectivity loss through the sandbox transport.
-    from marcelorian.transport.base import TransportUnavailable
-
-    def offline():
-        raise TransportUnavailable("offline")
-
-    world.sandbox.account = offline  # type: ignore[method-assign]
-    world.clock.set(at(20, 9))
-    assert world.dispatch(mid).reason == "transport_unavailable"
-    world.clock.set(at(20, 10))
-    assert world.dispatch(mid).reason == "transport_unavailable"
-    world.clock.set(at(20, 11))
-    assert apply_rule(world) == [(mid, "needs_reapproval")]
 
 
 def test_brief_restart_within_window_preserves_queue(queued) -> None:
@@ -123,19 +85,6 @@ def test_persistent_pause_for_whole_window_is_deliberate(queued) -> None:
         assert runtime.get_runtime(s, world.clock.now()).dispatch_paused
 
 
-def test_partial_pause_then_worker_off_is_a_miss(queued) -> None:
-    world, _camp, mid = queued
-    world.clock.set(at(20, 7))
-    with transaction(world.factory) as s:
-        runtime.pause_dispatch(s, actor=Actor.APPLICANT, now=world.clock.now())
-    world.clock.set(at(20, 9))
-    assert world.dispatch(mid).reason == "paused"  # evaluated, but while deliberately paused
-    with transaction(world.factory) as s:
-        runtime.resume_dispatch(s, actor=Actor.APPLICANT, now=world.clock.now())
-    world.clock.set(at(20, 11))  # worker gone for the whole unpaused remainder
-    assert apply_rule(world) == [(mid, "needs_reapproval")]
-
-
 def test_mode_switch_for_whole_window_is_deliberate(queued) -> None:
     world, _camp, mid = queued
     world.clock.set(at(20, 7))
@@ -144,43 +93,6 @@ def test_mode_switch_for_whole_window_is_deliberate(queued) -> None:
     world.clock.set(at(20, 11, 1))
     assert apply_rule(world) == [(mid, "rolled")]
     assert world.message(mid).mode == Mode.SANDBOX.value
-
-
-def test_approval_near_window_end_only_counts_remaining_portion(world) -> None:
-    world.clock.set(at(20, 10, 58))
-    camp = world.campaign(world.pi(world.institution()))
-    mid = world.draft_and_approve(camp)
-    assert world.message(mid).eligible_window_start == at(20, 8)
-    world.clock.set(at(20, 11))
-    assert apply_rule(world) == [(mid, "needs_reapproval")]  # nobody evaluated 10:58-11:00
-
-    world.clock.set(at(21, 10, 58))
-    camp2 = world.campaign(world.pi(world.institution()))
-    mid2 = world.draft_and_approve(camp2)
-    world.settings(pending_per_institution=0)
-    world.worker_cycle(mid2)  # evaluated within the remaining two minutes
-    world.clock.set(at(21, 11))
-    assert apply_rule(world) == [(mid2, "rolled")]
-
-
-def test_reapproval_resolves_missed_window_and_sends(queued) -> None:
-    world, camp, mid = queued
-    world.clock.set(at(20, 11, 5))
-    apply_rule(world)
-    world.clock.set(at(21, 9))
-    world.approve(mid)
-    assert world.campaign_row(camp).state == CampaignState.OUTREACH_PENDING.value
-    assert world.dispatch(mid).outcome is Outcome.SENT
-
-
-def test_startup_recovery_applies_rule_after_reconcile_and_sync(queued) -> None:
-    world, _camp, mid = queued
-    world.clock.set(at(21, 9))
-    result = reconciliation.startup_recovery(
-        world.factory, {Mode.SANDBOX: world.sandbox}, {"real": world.real_sync}, world.clock
-    )
-    assert result["missed_window"] == [(mid, "needs_reapproval")]
-    assert world.real_sync.calls == 1
 
 
 def test_window_not_passed_stays_queued(queued) -> None:
@@ -203,21 +115,6 @@ def test_blackout_defers_eligible_window_not_due(world) -> None:
 # -- every passed window is judged, not just the assigned one (review round 3) ----------------
 
 
-def test_windows_passed_during_a_long_outage_require_reapproval(queued) -> None:
-    world, camp, mid = queued
-    world.settings(pending_per_institution=0)
-    world.clock.set(at(20, 9))
-    assert world.worker_cycle(mid).reason == "over_capacity"  # Tuesday was considered
-    world.clock.set(resolve_local(datetime(2026, 11, 3, 9, 0), NY))  # two weeks later
-    assert apply_rule(world) == [(mid, "needs_reapproval")]
-    assert world.campaign_row(camp).state == CampaignState.PAUSED_REVIEW.value
-    with transaction(world.factory) as s:
-        from marcelorian.db.models import CampaignPause
-
-        pause = s.query(CampaignPause).filter_by(campaign_id=camp).one()
-    assert pause.source_ref.endswith(at(21, 11).isoformat())  # Wednesday was the missed one
-
-
 def test_each_considered_window_rolls_to_the_first_one_after_now(queued) -> None:
     world, _camp, mid = queued
     world.settings(pending_per_institution=0)
@@ -230,12 +127,59 @@ def test_each_considered_window_rolls_to_the_first_one_after_now(queued) -> None
     assert (message.eligible_window_start, message.eligible_window_end) == (at(22, 8), at(22, 11))
 
 
-def test_widened_policy_does_not_count_an_evaluation_twice(queued) -> None:
-    """A same-day wider window after the assigned one is judged only from its end."""
+# -- owner decision S7: nothing is sent without a click, so an unsent window just rolls ----
+
+
+def test_unclicked_window_rolls_without_reapproval(queued) -> None:
+    world, camp, mid = queued
+    world.clock.set(at(20, 11, 5))  # nobody clicked Send on Tuesday
+    assert apply_rule(world) == [(mid, "rolled")]
+    message = world.message(mid)
+    assert message.state == MessageState.APPROVED_QUEUED.value
+    assert (message.eligible_window_start, message.eligible_window_end) == (at(21, 8), at(21, 11))
+    assert world.campaign_row(camp).state == CampaignState.OUTREACH_PENDING.value
+    world.clock.set(at(21, 9))
+    assert world.dispatch(mid).outcome is Outcome.SENT  # the click re-runs every check
+
+
+def test_app_unavailable_through_window_still_rolls(queued) -> None:
     world, _camp, mid = queued
-    world.settings(pending_per_institution=0)
+    from marcelorian.transport.base import TransportUnavailable
+
+    def offline():
+        raise TransportUnavailable("offline")
+
+    world.sandbox.account = offline  # type: ignore[method-assign]
     world.clock.set(at(20, 9))
-    world.worker_cycle(mid)  # considered inside the assigned Tue 08:00-11:00
-    world.settings(window_end="16:00")  # widened afterwards
-    world.clock.set(at(20, 16, 5))  # nobody evaluated Tue 11:00-16:00
-    assert apply_rule(world) == [(mid, "needs_reapproval")]
+    assert world.dispatch(mid).reason == "transport_unavailable"
+    world.clock.set(at(20, 11))
+    assert apply_rule(world) == [(mid, "rolled")]
+
+
+def test_long_absence_rolls_to_the_first_window_after_now(queued) -> None:
+    world, camp, mid = queued
+    world.clock.set(resolve_local(datetime(2026, 11, 3, 9, 0), NY))  # two weeks later, Tue 09:00
+    assert apply_rule(world) == [(mid, "rolled")]
+    message = world.message(mid)
+    assert message.eligible_window_start == resolve_local(datetime(2026, 11, 3, 8, 0), NY)
+    assert world.campaign_row(camp).state == CampaignState.OUTREACH_PENDING.value
+
+
+def test_rolling_uses_the_current_policy(queued) -> None:
+    world, _camp, mid = queued
+    world.settings(window_end="16:00")  # widened after approval
+    world.clock.set(at(20, 16, 5))
+    assert apply_rule(world) == [(mid, "rolled")]
+    message = world.message(mid)
+    assert (message.eligible_window_start, message.eligible_window_end) == (at(21, 8), at(21, 16))
+
+
+def test_startup_recovery_rolls_after_reconcile_and_sync(queued) -> None:
+    world, _camp, mid = queued
+    world.clock.set(at(21, 9))
+    result = reconciliation.startup_recovery(
+        world.factory, {Mode.SANDBOX: world.sandbox}, {"real": world.real_sync}, world.clock
+    )
+    assert result["missed_window"] == [(mid, "rolled")]
+    assert world.real_sync.calls == 1
+    assert world.message(mid).eligible_window_end == at(21, 11)

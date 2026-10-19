@@ -395,10 +395,10 @@ def test_projected_contact_released_when_no_longer_needed(live, scenario) -> Non
     assert not _blocked_later(live, inst)
 
 
-# -- missed window + edited re-approval (B7) ---------------------------------------------------
+# -- missed window + edited re-approval (S7: the window rolls) ------------------------------
 
 
-def test_edit_then_approve_after_missed_window_resolves_reason(factory) -> None:
+def test_edit_after_a_rolled_window_reapproves_and_sends(factory) -> None:
     from tests.factories import World
 
     world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
@@ -406,8 +406,9 @@ def test_edit_then_approve_after_missed_window_resolves_reason(factory) -> None:
     mid = world.draft_and_approve(camp)
     world.clock.set(resolve_local(datetime(2026, 10, 20, 11, 5), NY))
     with transaction(world.factory) as s:
-        scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s))
-    assert world.campaign_row(camp).state == CampaignState.PAUSED_REVIEW.value
+        rolled = scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s))
+    assert rolled == [(mid, "rolled")]
+    assert world.campaign_row(camp).state == CampaignState.OUTREACH_PENDING.value
     world.clock.set(resolve_local(datetime(2026, 10, 21, 9, 0), NY))
     world.draft(camp, body="Dear Dr. Example,\n\nRevised wording.\n")
     world.approve(mid)
@@ -429,7 +430,7 @@ def test_missed_window_rule_uses_current_window_policy(factory) -> None:
     assert actions == [(mid, "rolled")]  # nothing could have been considered that day
 
 
-def test_evaluation_outside_narrowed_window_is_not_consideration(factory) -> None:
+def test_window_narrowed_after_approval_still_rolls(factory) -> None:
     from tests.factories import World
 
     world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
@@ -442,7 +443,9 @@ def test_evaluation_outside_narrowed_window_is_not_consideration(factory) -> Non
     world.clock.set(resolve_local(datetime(2026, 10, 20, 11, 0), NY))
     with transaction(world.factory) as s:
         actions = scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s))
-    assert actions == [(mid, "needs_reapproval")]
+    assert actions == [(mid, "rolled")]
+    message = world.message(mid)
+    assert message.eligible_window_end == resolve_local(datetime(2026, 10, 21, 9, 0), NY)
 
 
 def test_unloadable_zone_is_contained_per_message(factory) -> None:
@@ -456,13 +459,13 @@ def test_unloadable_zone_is_contained_per_message(factory) -> None:
     world.clock.set(resolve_local(datetime(2026, 10, 20, 11, 5), NY))
     with transaction(world.factory) as s:
         actions = dict(scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s)))
-    assert actions == {bad: "needs_reapproval", good: "needs_reapproval"}  # no abort
+    assert actions == {bad: "needs_reapproval", good: "rolled"}  # contained, no abort
 
 
-# -- sync gap is never masked by cap deferrals (B7) --------------------------------------------
+# -- a sync gap blocks every send; the approval waits (S7) -------------------------------------
 
 
-def test_sync_gap_evaluations_are_not_functioning(factory) -> None:
+def test_sync_gap_blocks_sends_and_the_approval_waits(factory) -> None:
     from tests.factories import World
 
     world = World(factory, ManualClock(resolve_local(datetime(2026, 10, 19, 12, 0), NY)))
@@ -476,10 +479,12 @@ def test_sync_gap_evaluations_are_not_functioning(factory) -> None:
     for hour in (8, 9, 10):
         world.clock.set(resolve_local(datetime(2026, 10, 20, hour, 30), NY))
         assert world.dispatch(mid).reason == "sync_gap"
-    world.clock.set(resolve_local(datetime(2026, 10, 20, 11, 0), NY))
+    world.clock.set(resolve_local(datetime(2026, 10, 20, 16, 0), NY))
     with transaction(world.factory) as s:
         actions = scheduling.apply_missed_window_rule(s, world.clock.now(), load_settings(s))
-    assert actions == [(mid, "needs_reapproval")]
+    assert actions == [(mid, "rolled")]
+    world.clock.set(resolve_local(datetime(2026, 10, 21, 9, 0), NY))
+    assert world.dispatch(mid).reason == "sync_gap"  # still nothing sent until the gap clears
 
 
 # -- B5 exit stays reachable after Cancel/Stop on a claimed message ----------------------------

@@ -335,13 +335,9 @@ Approval binds a snapshot containing: campaign ID, step, mode, connected sender 
 - A message never **starts** sending at or after the window end in PI local time (16:00 by default and never later; §1, W1). If preflight crosses the window end, nothing is submitted (B10).
 - Within a window, sends are spaced 2–6 minutes apart (random) and limited by caps. Spacing is measured from the latest instant a claimed submission may start, so it holds between actual Gmail calls, not only between claims. Deferral for caps or pacing during normal operation rolls to the next valid window automatically, with no catch-up bursts.
 - **Pacing ledger (B8):** spacing is serialized and persisted across actual Gmail submissions in both `live` and `transport_test`, regardless of the PI's time zone. Sandbox uses its own simulated clock and pacing. A restart or mode switch never resets real-send spacing. A transport-test override never bypasses pacing.
-- **Missed-window rule (B7):** re-approval (`needs_reapproval`, campaign `paused_review(missed_window)`) is required only when an assigned eligible window passes with **no functioning dispatch/safety evaluation** of the message during the portion in which it could have been considered, because the worker or required connectivity/sync was unavailable.
-  - Every window that has passed unsent is judged in turn: the assigned window, then each next eligible window up to now. The message rolls on only while each passed window was considered; the first one that passed unattended requires re-approval.
-  - The relevant portion starts at the latest of the window start, the approval time, and the due time. It contains only instants that the *current* window policy permits, so blackouts or narrowed hours added after approval are honoured. It excludes deliberate persistent-pause intervals and intervals when another mode was active.
-  - Every evaluation is recorded with its outcome and deferral reason. It counts as *functioning* only if the worker ran with valid Gmail authorization and a current sync. A process heartbeat alone is not proof of Gmail coverage.
-  - A *current sync* means Gmail coverage no more than 15 minutes old (three polling cycles) when the evaluation starts, with no open mailbox gap. Functioning is decided from that recorded state, not from the deferral reason, so a local cap or pacing deferral while coverage is stale is not evidence of consideration. A deliberate safety hold by a functioning worker (the app's own earlier attempt to this person is still unresolved) is functioning. A message whose approval snapshot fails its hash check goes to review, without affecting other messages.
-  - Missing or untrustworthy evaluation evidence requires review. A successful check is never fabricated.
-  - Ordinary brief restarts, pacing/cap deferrals, deliberate persistent pause, and deliberate mode switches do not by themselves invalidate approval; such messages roll to the next eligible window.
+- **Missed-window rule (owner decision S7, 2026-10-19; replaces B7's re-approval):** nothing is sent without the applicant's click (§9.8, S1), so an assigned window that passes unsent was the applicant's choice or one of the app's own holds (pacing, caps, review, pause, an outage). The approval simply waits: the message rolls to the next permitted window under the *current* policy (from now and its due time), with no re-approval and no review. The click re-runs every final check against the current state.
+  - Only a snapshot that fails its hash check, or a policy with no permitted window, invalidates the approval (`needs_reapproval`, `paused_review(missed_window)`); this is contained per message.
+  - Every evaluation (click or deferral) is still recorded with its outcome, reason and whether a current sync existed, as an audit; it no longer decides re-approval.
   - Messages whose window hasn't passed remain queued.
 - **Modes (B9):** one mode is active for dispatch and follow-up generation. Switching mode is an intentional pause, not a missed-window event, and dispatch resumes only when the applicant explicitly resumes it for the selected mode. Switching never changes a stored message's mode.
 - **Startup / resume / network recovery:**
@@ -418,7 +414,7 @@ The real mailbox uses one of two channels, chosen at setup (S2). The rule of §1
 
 1. **Outlook hand-off (primary).** The app has **no access** to the Outlook mailbox: no Microsoft API, no app registration and no IT approval. The applicant presses **Open in Outlook** or **Download email file**; the app runs every final check of §9.6 that does not need the mailbox (snapshot and hash, mode, pause, campaign stop/review, do-not-contact, duplicate outreach, recipient, verified time zone, salutation, due time, window, pacing, 24-hour budget, capacity and reservations), records a **hand-off** (the `send_attempt`, status `handed_off`; budget held; pacing recorded at the hand-off), and gives the applicant the email (S3):
    - a link that opens a pre-filled new message in Outlook on the web (Outlook adds the applicant's signature; disabled when the email is too long for a link);
-   - an `.eml` file that Outlook opens as an editable unsent message (`X-Unsent: 1`; the app's signature setting is appended; no From header, Outlook uses the signed-in account);
+   - an `.eml` file that Outlook opens as an editable unsent message (`X-Unsent: 1`; the app's signature setting is appended; no From header, Outlook uses the signed-in account). There is no default signature (owner decision S8): before the first hand-off the applicant adds one, or skips it, and can change it later;
    - copy buttons for To, Subject and Body. Follow-ups are sent by replying to the earlier email in Outlook and pasting the body, which keeps the thread; the link and file give the `Re:` subject but start a new thread.
    The applicant presses Send in Outlook and then records the outcome in the app (S4): **Sent** (the send time is that confirmation; provenance `applicant_reported`; the next step is scheduled from it) or **Not sent** (budget released; the message needs re-approval; final, so the screen asks for confirmation first). Small edits in Outlook are allowed; the app keeps the approved text as the record and notes that edits may have been made (S6). The same hand-off can be reopened (link, file, copy) until it is resolved; reopening never creates a second hand-off. An unresolved hand-off counts as possibly sent: it blocks another hand-off or send to the same person and holds budget, exactly like an unresolved attempt. At most **three** hand-offs may be unresolved at once (S5).
    - **Known limit:** the checks hold at the hand-off instant. The app cannot see or control when the applicant presses Send in Outlook, so a send pressed later (after the window, or after a reply arrived) is outside its control; the reminder and the Sent confirmation keep that gap short and recorded.
@@ -497,7 +493,7 @@ All counts are per mode, except the real-submission budget and pacing ledger, wh
   - The UI explains that this can need applicant action: cancel an excess unsent campaign, restore the limit, or wait for an already-contacted campaign to release capacity. It does not claim that rolling to another window will resolve it.
   - Example (required test): two reserved but unsent initials under a newly lowered limit of one may both be blocked. Cancelling either releases its reservations and permits the other. There is no hidden permanent lock and no automatic cancellation.
   - Existing follow-ups need no new pending or new-contact slot. They still obey the current 24-hour budget, pacing, windows, approval, and reply checks.
-  - A cap-only deferral is never by itself a missed-window/re-approval event; a window whose only evaluations ran without a current sync still goes to review (§9.4).
+  - A cap-only deferral is never a re-approval event; the approval waits for the next window (§9.4, S7).
 - **Adjustable limits (B16):** defaults are 25 real submissions per rolling 24 hours, 2 pending per institution, 1 per lab, and 3 new contacts per institution per rolling 30 days.
   - There are no hardcoded ceilings. Values must be finite, sensible integers.
   - Any increase above a default needs explicit warning/confirmation and is audited.
@@ -687,7 +683,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 14. An unknown/ambiguous time zone blocks scheduling.
 15. No send starts at or after the window end in local time (16:00 by default, earlier if narrowed; never on a weekend) (W1).
 16. Pacing; cap deferral rolls to the next window with no burst.
-17. No functioning evaluation during the considerable portion of the assigned window (worker asleep or sync/connectivity unavailable) → `needs_reapproval`; an ordinary restart, pacing/cap deferral, deliberate persistent pause, or mode switch preserves the approval and rolls the window; approval near a window's end is judged only on the remaining portion; only instants the current window policy permits count; persistent pause; cancellation (B7).
+17. An assigned window that passes unsent (no click, an outage, caps, pacing, pause or mode switch) rolls the approval to the next permitted window under the current policy, with no re-approval; only a snapshot failing its hash or no permitted window invalidates it, per message; persistent pause; cancellation (S7).
 18. Optional blackouts are off by default; when on, they defer without rewriting due dates.
 
 **Gateway and recovery**
@@ -758,7 +754,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 **Added by the P0 adversarial review (automated, P0)**
 70. Addresses are compared in one canonical form: a pasted `mailto:` link is reduced to the plain address and then checked against the real-PI, allowlist, and do-not-contact rules; display names, group syntax, quoted and non-ASCII forms are rejected; the rendered `To` header is re-parsed and must deliver to exactly the recorded recipient (B11, C7).
 71. A re-discovered, unmerged record that shares any exact known address or ORCID/OpenAlex identifier with a contacted or do-not-contact record is blocked, at approval and at dispatch; in live and sandbox, a prior-contact hit that is the app's own message for another campaign blocks as duplicate outreach and is never acknowledgeable (C7, B14).
-72. Local cap or pacing deferrals while Gmail coverage is stale are not functioning evaluations; an unresolved own attempt is a functioning safety hold; a snapshot failing its hash sends only that message to review (B7).
+72. Evaluations record whether a current sync existed (audit only since S7); an unresolved own attempt is a deliberate safety hold; a snapshot failing its hash sends only that message to review.
 73. Gmail read requests that are not exactly metadata-only are refused; log redaction covers the full formatted output, including tracebacks; malformed or foreign cookies from other 127.0.0.1 pages never lock the applicant out of the UI (§2, §10).
 
 **Added by the owner's P0 repair review (automated, P0)**
@@ -775,6 +771,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 84. Email 1 hand-off requires the applicant's prior-contact confirmation; a reported earlier contact opens `prior_contact_found`. A follow-up hand-off requires the no-reply confirmation; a reported reply moves the campaign to `conversation` and cancels unsent steps (§9.8).
 85. The `.eml` file opens as an unsent message (`X-Unsent: 1`), has no From header, carries the approved To, subject, body and signature, and rejects header injection; the Outlook link is disabled when too long (§9.8, S3).
 86. The Gmail gateway refuses to send while the active mailbox is an Outlook hand-off, and the hand-off refuses while it is Gmail; the send button's countdown matches the gateway's window, due, pacing and budget checks (§9.8, S1, S2).
+87. The first hand-off waits until the applicant saves or skips the signature step; the saved signature is appended to the file and copy text, never to the Outlook link (§9.8, S8).
 
 **LIVE (Windows 11, transport_test, allowlisted addresses only, explicit authorization)**
 - L1: Self-send; a two-address thread with a reply from the second address; verify threading/subject.
@@ -806,7 +803,7 @@ The 20–30-candidate pilot evaluates discovery, evidence, drafting, and sandbox
 | Report is read-only + consented | Report service (allowlisted file ID, RAW) | 47–48 |
 | Audit integrity | Exports (lossless, formula-safe) + backups | 49–51 |
 | Local UI protected | Session bootstrap + Host/Origin/CSRF + lenient cookie parsing | 52, 73 |
-| Nothing sent without the applicant's click | No auto-dispatch; send-button readiness shares the claim's final checks; Outlook hand-off with recorded Sent/Not sent | 81–86 |
+| Nothing sent without the applicant's click | No auto-dispatch; send-button readiness shares the claim's final checks; Outlook hand-off with recorded Sent/Not sent | 81–87 |
 
 ---
 

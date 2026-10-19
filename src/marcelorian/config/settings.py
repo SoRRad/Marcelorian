@@ -59,7 +59,10 @@ class AppSettings:
     last_interval_days: int = 30
     #: Plain-text signature appended to Outlook hand-off files and copy text (§9.8).
     #: The Outlook-on-the-web link omits it: Outlook adds the account's own signature.
+    #: No default (owner decision S8): the applicant adds it, or skips it, at first use.
     email_signature: str = ""
+    #: True once the applicant saved or skipped the signature step (``set_signature``).
+    signature_step_done: bool = False
     blackout_federal_holidays: bool = False
     blackout_year_end: bool = False
     year_end_start: str = "12-20"
@@ -145,7 +148,12 @@ def validate(settings: AppSettings) -> AppSettings:
         raise SettingsError("last_interval_mode must be calendar_month or n_days") from exc
     weekdays = tuple(sorted({_strict_int("window_weekdays", d) for d in settings.window_weekdays}))
     values["window_weekdays"] = weekdays
-    for key in ("blackout_federal_holidays", "blackout_year_end", "hold_slot_14d_after_email4"):
+    for key in (
+        "blackout_federal_holidays",
+        "blackout_year_end",
+        "hold_slot_14d_after_email4",
+        "signature_step_done",
+    ):
         if not isinstance(getattr(settings, key), bool):
             raise SettingsError(f"{key} must be true or false")
     signature = settings.email_signature
@@ -245,6 +253,18 @@ def _window_widened(new: WindowPolicy, default: WindowPolicy, old: WindowPolicy)
         if cursor < new.end:
             return True
     return False
+
+
+def set_signature(session: Session, signature: str, *, actor: Actor, now: datetime) -> AppSettings:
+    """The first-use signature step (owner decision S8): save a signature, or pass ""
+    to go without one (Outlook on the web still adds the account's own signature to
+    the link). Either way the step is done; the signature can be changed later."""
+    return update_settings(
+        session,
+        {"email_signature": signature, "signature_step_done": True},
+        actor=actor,
+        now=now,
+    )
 
 
 def load_settings(session: Session) -> AppSettings:

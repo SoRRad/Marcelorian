@@ -139,6 +139,40 @@ the repository.
     `disconnect` to delete the stored token. If L3 (7-day token survival) is
     going to be observed, keep the token and note the date.
 
+## P0.3b Outlook hand-off check (separate approval)
+
+The primary channel is the Outlook hand-off (spec §9.8, decisions S1–S8): the app
+never touches Outlook, it prepares each email and you send it yourself. This check
+needs its own written approval and runs in `transport_test` between your Outlook
+address (**S**) and a second consenting address (**R2**), with synthetic text only.
+The Gmail steps above are not needed for it.
+
+Setup: connect the Outlook hand-off mailbox with S's address, complete the
+signature step (add a synthetic signature or skip), and allowlist R2 only.
+
+1. **Link, Email 1 to R2:** click **Open in Outlook**. Check that a new message
+   opens with To, the exact subject (with the en dash) and the body filled in, and
+   that Outlook added its own signature. Send it from Outlook, then click **Sent**.
+2. **File:** for a second test campaign, click **Download email file** and open it.
+   Check: it opens as an editable new message, the app signature is at the end,
+   the synthetic CV is attached, and there is no From line to fill. Send it, then
+   click **Sent**.
+3. **Follow-up by reply and paste:** when step 2 of campaign 1 is due (a
+   transport_test schedule override may shorten the wait), open the earlier email
+   in Sent Items, click **Reply**, paste the copied body, send, then click **Sent**.
+   Check in R2's mailbox that it arrived in the same conversation with one `Re:`.
+4. **Follow-up by file (thread test, owner decision 2026-10-19):** for campaign 2's
+   step 2, use **Download email file** instead and send it. Record whether R2's
+   mailbox shows it in the same conversation or as a new one. Either result is
+   fine; it decides whether the app recommends reply-and-paste only.
+5. **Not sent:** hand off a third test email, close it without sending, click
+   **Not sent** (after the confirmation). Check that the message needs
+   re-approval and nothing reached R2.
+6. **Reply:** from R2, reply to campaign 1. In the app click **PI replied**. Check
+   that the campaign moves to conversation and no further step is offered.
+
+At most 6 real sends in total. Record results in section 6 of the report template.
+
 ## Do not
 
 - Do not send to, or put in the allowlist, any address that is not one of the two consenting test addresses.

@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from marcelorian.clock import ManualClock
-from marcelorian.config.settings import load_settings, update_settings
+from marcelorian.config.settings import load_settings, set_signature, update_settings
 from marcelorian.config.specialty import load_specialty
 from marcelorian.db.engine import transaction
 from marcelorian.db.models import (
@@ -204,6 +204,10 @@ class World:
     def connect_handoff_mailbox(self, email: str = APPLICANT_EMAIL) -> None:
         with transaction(self.factory) as s:
             approvals.connect_handoff_mailbox(s, email, actor=Actor.APPLICANT, now=self.clock.now())
+
+    def signature_step(self, signature: str = "") -> None:
+        with transaction(self.factory) as s:
+            set_signature(s, signature, actor=Actor.APPLICANT, now=self.clock.now())
 
     def hand_off(
         self, message_id: int, *, prior_contact_checked: bool = True, no_reply: bool = True
