@@ -89,7 +89,10 @@ def list_backups(backups_dir: Path) -> list[BackupInfo]:
 def prune(backups_dir: Path, keep: int = KEEP) -> list[str]:
     removed = []
     for info in list_backups(backups_dir)[keep:]:
-        info.path.unlink(missing_ok=True)
+        try:
+            info.path.unlink(missing_ok=True)
+        except OSError:  # open elsewhere (Windows locks open files): try again next time
+            continue
         removed.append(info.name)
     return removed
 

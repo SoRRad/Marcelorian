@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import timedelta
 from pathlib import Path
 
@@ -60,15 +61,27 @@ def test_backup_is_consistent_and_pruned(paths, clock) -> None:
     factory = prepare_database(paths.db_path, clock, paths.backups_dir)
     _set_name(factory, "Synthetic Before")
     made = backup.backup_now(paths.db_path, paths.backups_dir, clock.now(), label="manual")
-    with sqlite3.connect(made) as copy:
+    with closing(sqlite3.connect(made)) as copy:  # closes (Windows locks open files)
         assert copy.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         row = copy.execute("SELECT value_json FROM settings WHERE key = 'synthetic_marker'")
         assert json.loads(row.fetchone()[0]) == "Synthetic Before"  # WAL content included
     for hours in range(1, 20):
         backup.backup_now(paths.db_path, paths.backups_dir, clock.now() + timedelta(hours=hours))
     assert len(backup.list_backups(paths.backups_dir)) == backup.KEEP
+    oldest = backup.list_backups(paths.backups_dir)[-1].path
+    real_unlink = Path.unlink
+
+    def locked(self, missing_ok=False):
+        if self == oldest:
+            raise PermissionError("open elsewhere")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(Path, "unlink", locked)
+        backup.backup_now(paths.db_path, paths.backups_dir, clock.now() + timedelta(hours=30))
+    assert oldest.exists()  # a locked old copy never breaks a new backup
     assert not backup.due_daily(paths.backups_dir, clock.now() + timedelta(hours=20))
-    assert backup.daily(paths.db_path, paths.backups_dir, clock.now() + timedelta(hours=44))
+    assert backup.daily(paths.db_path, paths.backups_dir, clock.now() + timedelta(hours=60))
 
 
 def test_restore_is_staged_then_applied_at_start_with_sending_paused(paths, clock) -> None:
