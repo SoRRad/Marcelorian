@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from marcelorian.clock import Clock, PracticeClock
 from marcelorian.lookups.http import Fetcher
+from marcelorian.platform.paths import AppPaths
 from marcelorian.platform.secrets import SecretStore, open_secret_store
 from marcelorian.services.ai import AnthropicClient, ClientFactory
 from marcelorian.services.gateway import SendGateway
@@ -35,6 +36,9 @@ class UIContext:
     secrets: Callable[[], SecretStore] = open_secret_store
     ai_client: ClientFactory = AnthropicClient
     worker: BackgroundWorker | None = None
+    #: Data, backup and export folders; None in tests that do not exercise them.
+    paths: AppPaths | None = None
+    request_shutdown: Callable[[], None] | None = None
 
     def wake_worker(self) -> None:
         if self.worker is not None:

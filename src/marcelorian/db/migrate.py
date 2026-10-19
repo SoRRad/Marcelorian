@@ -29,8 +29,19 @@ def alembic_config() -> Config:
     return config
 
 
+def needs_upgrade(engine: Engine) -> bool:
+    """True when the database is behind the bundled migrations (the launcher backs up first)."""
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    head = ScriptDirectory.from_config(alembic_config()).get_current_head()
+    with engine.connect() as connection:
+        current = MigrationContext.configure(connection).get_current_revision()
+    return current != head
+
+
 def upgrade(engine: Engine, revision: str = "head") -> None:
-    """Upgrade the database. P4 adds an online-API backup before each migration."""
+    """Upgrade the database (the launcher makes an online-API backup first, spec §14)."""
     _run(engine, lambda config: command.upgrade(config, revision))
 
 

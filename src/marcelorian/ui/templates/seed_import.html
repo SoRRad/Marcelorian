@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/research">&larr; Research catalog</a></p>
+<section class="card">
+  <h2>Import “{{ name }}”</h2>
+  <p>{{ plan.row_count }} rows · snapshot {{ plan.snapshot_dates|join(", ") or "-" }}</p>
+  <ul>{% for label, count in counts.items() %}<li>{{ label.replace("_", " ") }}: {{ count }}</li>{% endfor %}</ul>
+  {% if plan.unknown_columns %}<p class="note">Extra columns are kept with each lead: {{ plan.unknown_columns|join(", ") }}.</p>{% endif %}
+  {% if errors %}
+  <p class="alert">This file has rows that are not valid, so it cannot be imported. Nothing was changed.</p>
+  <ul>{% for e in errors %}<li>Line {{ e.line or "-" }} {{ e.record_id or "" }}: {{ e.reason }}</li>{% endfor %}{% if more_errors %}<li>… and {{ more_errors }} more</li>{% endif %}</ul>
+  {% endif %}
+  <p class="note">Importing only adds research leads to check. It never contacts anyone, and never creates contacts, drafts or emails.</p>
+  <div class="quick-buttons">
+    {% if plan.ok and plan.row_count %}<form method="post" action="/research/import/{{ token }}/commit"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary">Import these leads</button></form>{% endif %}
+    <form method="post" action="/research/import/{{ token }}/cancel"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Cancel</button></form>
+  </div>
+</section>
+{% endblock %}

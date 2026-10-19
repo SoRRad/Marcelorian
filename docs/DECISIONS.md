@@ -543,3 +543,43 @@ owner's written description of each finding.
     (spec §2), the pilot uses the browser's own desktop notifications, which
     the applicant turns on with one click; no extra dependency, and nothing
     runs when the app is closed. A tray icon can follow after the pilot.
+48. **Records, backups and deletion (P4, U4).** Exports go to Documents\
+    Marcelorian\exports (live at the top, practice in `practice\`, transport
+    tests in `test\`): `outreach_contacts.csv`, `email_log.csv` (exact approved
+    text per approval and attempt), and for the owner instead of a Google Sheet
+    `owner_report.csv` (the spec §13 default allowlist; no notes, CV, visa
+    details, addresses or correspondence) and `status_summary.csv` (counts,
+    response rate, places in use, estimated Claude cost). Gmail-specific columns
+    are dropped for the Outlook pilot. Files are rebuilt by the worker whenever
+    the audit log grew, written to a temp file and swapped in atomically, UTF-8
+    with BOM, fully quoted. A file Excel holds open marks the export stale (a
+    notice) and is retried next cycle; sending state is never touched. Formula
+    safety: a cell starting with `= + - @`, tab, CR **or an apostrophe** gets one
+    leading apostrophe, so removing exactly one restores the exact text
+    (property-tested). Backups use the SQLite online backup API with an
+    integrity check: daily (worker), before every database update (launcher),
+    and on demand; the newest 14 are kept. Restore is staged and applied at the
+    next start before the database opens (current data backed up first,
+    WAL/SHM removed), and the restored app starts with sending paused
+    (`restored_backup`). "Delete all my data" (type DELETE): pauses sending,
+    recalls approvals, writes a marker and closes the app; after the server,
+    worker, database and logs are closed it removes the Claude key, the
+    database with WAL/SHM, staged restore, backups, logs and the exports folder,
+    then prints what remains outside the app. An interrupted deletion finishes
+    at the next start. Gmail/Sheet steps of spec §14 do not apply (U3, U4).
+49. **Tester package (P5, N5) and in-app lead import.** The tester gets a
+    no-install zip from a GitHub (pre-)release: `Start Marcelorian.bat`, the
+    plain-language guide (`docs/TESTER_GUIDE.md`) and a private Python copy.
+    The `Package` workflow (manual) takes Python 3.12.10 from
+    `actions/setup-python` (no unverified download), installs dependencies from
+    `requirements/runtime-windows.txt` (hash-checked, wheels only; pins equal
+    the dev lock, tested), copies the app, runs `--self-test` from the packaged
+    copy, zips it with a `.sha256`, and publishes a pre-release only when asked;
+    only that job gets `contents: write`. The launcher runs Python with `-I`, so
+    the tester's other Python installs and variables cannot interfere. Data stays
+    in `%LOCALAPPDATA%\Marcelorian`, so a new version carries it over (backed up
+    before any database update). CI builds and self-tests the zip on Windows for
+    every pull request. Because testers cannot use a command line, the lead list
+    is imported from the Research page (upload → preview with the same
+    whole-file validation → import, or cancel); it stays local and offline, and
+    still only stages research leads.

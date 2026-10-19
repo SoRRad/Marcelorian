@@ -2,7 +2,7 @@
 #
 # * No secrets, no live service calls, read-only repository permissions.
 # * Ubuntu and Windows jobs; superseded runs are cancelled; jobs time out.
-# * Installer/release builds are added in P5.
+# * The tester zip is built by package.yml; here Windows only checks that it builds.
 # * Triggers are deliberately limited to pull requests into main and manual runs.
 #   Before relying on this workflow, the owner checks the account's current
 #   GitHub Actions billing and allowance (public vs private repository,
@@ -48,3 +48,7 @@ jobs:
         run: python -m mypy
       - name: Tests
         run: python -m pytest -q
+      - name: Packaging smoke test (builds and self-tests the zip; nothing is published)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python packaging/build_zip.py --version v0.0.0-ci

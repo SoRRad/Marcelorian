@@ -1,7 +1,9 @@
 """Start Marcelorian on this computer: ``python -m marcelorian``.
 
-1. Takes the single-instance lock for the data folder (spec §2).
-2. Upgrades the database (migrations) and makes sure the applicant profile exists.
+1. Takes the single-instance lock for the data folder (spec §2), and finishes an
+   interrupted "Delete all my data" if one is pending.
+2. Finishes a staged restore (sending then starts paused), backs up before an update,
+   upgrades the database and makes sure the applicant profile exists.
 3. Serves the local UI on 127.0.0.1 at a free port and opens it in the browser with
    a one-time sign-in link (the link is never logged).
 4. Starts the background worker (startup recovery, then a check every minute: the
@@ -28,11 +30,13 @@ from typing import Any
 
 from marcelorian.clock import Clock, SystemClock
 from marcelorian.db.engine import make_engine, make_session_factory, transaction
-from marcelorian.db.migrate import upgrade
+from marcelorian.db.migrate import needs_upgrade, upgrade
+from marcelorian.domain.enums import Actor, RuntimePauseReason
 from marcelorian.logging_setup import UVICORN_LOG_KWARGS, configure_logging
 from marcelorian.platform.instance_lock import AlreadyRunning, InstanceLock
-from marcelorian.platform.paths import resolve_app_paths
-from marcelorian.services import profile, runtime
+from marcelorian.platform.paths import AppPaths, resolve_app_paths
+from marcelorian.platform.secrets import open_secret_store
+from marcelorian.services import backup, deletion, profile, runtime
 from marcelorian.ui.app import create_app, worker_of
 from marcelorian.ui.security import UISecurity
 
@@ -46,16 +50,28 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def prepare_database(db_path: Path, clock: Clock) -> Any:
-    """Migrate and seed first-run state; returns the session factory."""
+def prepare_database(db_path: Path, clock: Clock, backups_dir: Path | None = None) -> Any:
+    """Finish a staged restore, back up before an update, migrate, seed first-run state.
+
+    Returns the session factory. A restored database starts with sending paused (§14).
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    backups = backups_dir or db_path.parent / "backups"
+    restored = backup.apply_pending_restore(db_path, backups, clock.now())
+    existed = db_path.is_file()
     engine = make_engine(db_path)
+    if existed and needs_upgrade(engine):
+        backup.backup_now(db_path, backups, clock.now(), label="before-update")
     upgrade(engine)
     factory = make_session_factory(engine)
     with transaction(factory) as session:
         now = clock.now()
         profile.applicant(session, now)
         runtime.get_runtime(session, now)  # first run: sandbox mode (spec §16)
+        if restored:
+            runtime.pause_dispatch(
+                session, actor=Actor.SYSTEM, now=now, reason=RuntimePauseReason.RESTORED_BACKUP
+            )
     return factory
 
 
@@ -67,40 +83,110 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Start Marcelorian.")
     parser.add_argument("--data-dir", type=Path, default=None, help="default: the app data folder")
     parser.add_argument("--no-browser", action="store_true", help="do not open the browser")
+    parser.add_argument(
+        "--self-test", action="store_true", help="check this copy works, then exit (packaging)"
+    )
     args = parser.parse_args(argv)
+    if args.self_test:
+        return self_test()
 
-    paths = resolve_app_paths()
-    data_dir: Path = args.data_dir or paths.data_dir
-    db_path = data_dir / "marcelorian.db"
-    configure_logging(data_dir / "logs")
+    resolved = resolve_app_paths()
+    data_dir: Path = args.data_dir or resolved.data_dir
+    paths = AppPaths(
+        data_dir=data_dir,
+        exports_dir=data_dir / "exports" if args.data_dir else resolved.exports_dir,
+        exports_synced_by_onedrive=False if args.data_dir else resolved.exports_synced_by_onedrive,
+    )
+    configure_logging(paths.logs_dir)
     logging.getLogger("alembic").setLevel(logging.WARNING)  # keep the window readable
     clock = SystemClock()
     try:
-        lock = InstanceLock(data_dir / "instance.lock").acquire()
+        lock = InstanceLock(paths.lock_path).acquire()
     except AlreadyRunning:
         print("Marcelorian is already running. Use the window that is already open.")
         return 2
     try:
-        factory = prepare_database(db_path, clock)
+        if deletion.requested(data_dir):  # an interrupted "Delete all my data"
+            return _finish_deletion(paths, None)
+        factory = prepare_database(paths.db_path, clock, paths.backups_dir)
         port = free_port()
         security = UISecurity(HOST, port, clock)
-        app = create_app(security, factory, clock)
+        holder: dict[str, Any] = {}
+        app = create_app(
+            security, factory, clock, paths=paths, request_shutdown=lambda: _stop(holder)
+        )
         worker = worker_of(app)
         worker.start()  # recovery first, then a check every minute; never sends
         try:
-            return _serve(app, security, port, open_browser=not args.no_browser)
+            code = _serve(app, security, port, open_browser=not args.no_browser, holder=holder)
         finally:
             worker.stop()
+        if deletion.requested(data_dir):
+            return _finish_deletion(paths, factory)
+        return code
     finally:
         lock.release()
 
 
-def _serve(app: Any, security: UISecurity, port: int, *, open_browser: bool) -> int:
+def self_test() -> int:
+    """Build a throwaway database and app and run one worker cycle; nothing is kept."""
+    import tempfile
+
+    import anthropic  # noqa: F401 - optional Claude support must be importable
+
+    from marcelorian.config.specialty import load_specialty
+
+    with tempfile.TemporaryDirectory(prefix="marcelorian-selftest-") as tmp:
+        clock = SystemClock()
+        factory = prepare_database(Path(tmp) / "marcelorian.db", clock)
+        app = create_app(UISecurity(HOST, free_port(), clock), factory, clock)
+        result = worker_of(app).cycle()
+        factory.kw["bind"].dispose()
+    if result is None:
+        print("Self-test failed: the background check did not run.")
+        return 1
+    print(f"Self-test passed ({load_specialty().display_name}).")
+    return 0
+
+
+def _stop(holder: dict[str, Any]) -> None:
+    server = holder.get("server")
+    if server is not None:
+        server.should_exit = True
+
+
+def _finish_deletion(paths: AppPaths, factory: Any) -> int:
+    """Close the database and logs, then remove everything (Windows cannot delete open files)."""
+    if factory is not None:
+        factory.kw["bind"].dispose()
+    logging.shutdown()
+    report = deletion.perform_deletion(paths, open_secret_store)
+    if report.failed:
+        print("Some items could not be deleted: " + ", ".join(report.failed) + ".")
+        print("Close any program using them and start Marcelorian again to finish.")
+        return 1
+    print("Your Marcelorian data has been deleted from this computer.")
+    print("What stays outside the app:")
+    for line in deletion.REMAINS:
+        print(f"  - {line}")
+    return 0
+
+
+def _serve(
+    app: Any,
+    security: UISecurity,
+    port: int,
+    *,
+    open_browser: bool,
+    holder: dict[str, Any] | None = None,
+) -> int:
     import uvicorn
 
     server = uvicorn.Server(
         uvicorn.Config(app, host=HOST, port=port, log_level="warning", **UVICORN_LOG_KWARGS)  # type: ignore[arg-type]
     )
+    if holder is not None:
+        holder["server"] = server  # lets "Delete all my data" stop the server
 
     def when_ready() -> None:
         while not server.started and not server.should_exit:
