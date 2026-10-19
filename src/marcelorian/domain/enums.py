@@ -16,6 +16,16 @@ class Mode(StrEnum):
         return self in (Mode.LIVE, Mode.TRANSPORT_TEST)
 
 
+class Channel(StrEnum):
+    """How a message reaches the PI (spec §9.8; owner decision S2)."""
+
+    SANDBOX = "sandbox"  # fake transport, sandbox mode only
+    GMAIL = "gmail"  # the app submits through the Gmail API
+    #: The app prepares the email; the applicant sends it from Outlook and records the
+    #: outcome. The app has no access to that mailbox.
+    OUTLOOK_HANDOFF = "outlook_handoff"
+
+
 class Ledger(StrEnum):
     """Submission/pacing ledgers. Live and transport_test share REAL (B8, B17, C9)."""
 
@@ -76,7 +86,15 @@ class MessageState(StrEnum):
     UNCERTAIN = "uncertain"
     CANCELLED = "cancelled"
     NEEDS_REAPPROVAL = "needs_reapproval"
+    #: Given to the applicant to send from Outlook; waiting for Sent / Not sent (§9.8).
+    HANDED_OFF = "handed_off"
 
+
+#: Possibly being submitted: cannot be edited, revoked or cancelled outright; a cancel
+#: is recorded as a request that takes effect once non-submission is definite (B5).
+IN_SUBMISSION_STATES: frozenset[MessageState] = frozenset(
+    {MessageState.SENDING, MessageState.HANDED_OFF}
+)
 
 #: Message states that a genuine reply / closure / stop cancels outright.
 UNSENT_CANCELLABLE_STATES: frozenset[MessageState] = frozenset(
@@ -106,11 +124,21 @@ class AttemptStatus(StrEnum):
     #: Definitely never submitted: an uncertain attempt resolved by recorded evidence, or a
     #: claimed attempt the gateway never handed to the transport (resolution "not_invoked").
     NOT_SUBMITTED = "not_submitted"
+    #: Outlook hand-off given to the applicant; neither Sent nor Not sent recorded yet.
+    HANDED_OFF = "handed_off"
 
 
+#: Gmail attempts awaiting reconciliation or resolution. Never includes ``handed_off``:
+#: the app cannot reconcile a hand-off, only the applicant can resolve it.
 UNRESOLVED_ATTEMPT_STATES: frozenset[AttemptStatus] = frozenset(
     {AttemptStatus.IN_FLIGHT, AttemptStatus.UNCERTAIN}
 )
+
+#: Attempts that may have reached the recipient and are not settled: they hold budget,
+#: block a second attempt to the same person and keep capacity (B14; §9.8).
+POSSIBLY_SUBMITTED_STATES: frozenset[AttemptStatus] = UNRESOLVED_ATTEMPT_STATES | {
+    AttemptStatus.HANDED_OFF
+}
 
 
 class BudgetStatus(StrEnum):
@@ -158,7 +186,7 @@ class Actor(StrEnum):
 class SentAtProvenance(StrEnum):
     GATEWAY_RESPONSE = "gateway_response"
     GMAIL_RECONCILIATION = "gmail_reconciliation"
-    APPLICANT_REPORTED = "applicant_reported"
+    APPLICANT_REPORTED = "applicant_reported"  # incl. an Outlook hand-off's Sent click
 
 
 class DeferralReason(StrEnum):

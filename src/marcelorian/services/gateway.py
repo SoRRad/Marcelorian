@@ -1,8 +1,9 @@
 """The single send gateway (spec §9.6; decisions B2, B8, B10, B12-B14, B17, B20).
 
-Every sending path (UI approval, scheduler tick, recovery) calls
-``SendGateway.dispatch``. There is no other code path to a transport's
-``send``.
+Every send calls ``SendGateway.dispatch``; since owner decision S1 the only trigger
+is the applicant's Send click (recovery reconciles, never sends). There is no other
+code path to a transport's ``send``. The Outlook hand-off (``services.handoff``)
+sends nothing itself and reuses ``final_checks`` and ``apply_verdict``.
 
 Phases
 ------
@@ -57,6 +58,7 @@ from marcelorian.domain.enums import (
     Actor,
     AttemptStatus,
     CampaignState,
+    Channel,
     DeferralReason,
     InboundClassification,
     Ledger,
@@ -129,7 +131,7 @@ class DispatchResult:
 
 
 @dataclass(frozen=True)
-class _Verdict:
+class Verdict:
     outcome: Outcome
     reason: str
     invalidate: bool = False
@@ -177,6 +179,198 @@ def _expected_kind(mode: Mode) -> TransportKind:
     return TransportKind.GMAIL if mode.is_real else TransportKind.SANDBOX
 
 
+def final_checks(
+    session: Session,
+    message: Message,
+    settings: AppSettings,
+    now: datetime,
+    *,
+    preflight_started: datetime | None,
+    channel: Channel,
+) -> Verdict | None:
+    """Every local final check of §9.6, shared by the Gmail gateway and the Outlook
+    hand-off (§9.8). Read-only; ``apply_verdict`` records the outcome.
+
+    For the hand-off channel the checks that need mailbox access are skipped (auth
+    block, sync coverage, verified thread headers); the applicant's confirmations stand
+    in for the mailbox searches (DECISIONS note 35).
+    """
+    snapshot = (
+        session.get(ApprovalSnapshot, message.current_snapshot_id)
+        if message.current_snapshot_id
+        else None
+    )
+    if snapshot is None or snapshot.state != SnapshotState.ACTIVE.value:
+        return Verdict(Outcome.BLOCKED, "snapshot_not_active", invalidate=True)
+    try:
+        content = verify_canonical(snapshot.canonical_json, snapshot.sha256)
+    except SnapshotError:
+        return Verdict(Outcome.BLOCKED, "snapshot_hash_mismatch", invalidate=True)
+    mode = Mode(message.mode)
+    if (content.message_id, content.mode, content.step) != (message.id, mode, message.step):
+        return Verdict(Outcome.BLOCKED, "snapshot_mismatch", invalidate=True)
+    campaign = session.get(Campaign, message.campaign_id)
+    assert campaign is not None
+    view = runtime.get_runtime(session, now)
+    if view.active_mode is not mode:
+        return Verdict(Outcome.DEFERRED, DeferralReason.MODE_INACTIVE)
+    if view.dispatch_paused:
+        return Verdict(Outcome.DEFERRED, DeferralReason.PAUSED)
+    handoff = channel is Channel.OUTLOOK_HANDOFF
+    if mode.is_real and view.auth_blocked and not handoff:
+        return Verdict(Outcome.DEFERRED, DeferralReason.AUTH_REQUIRED)
+    # A mailbox-level gap is checked before any cap or pacing deferral, so a cap
+    # deferral can never be recorded as a functioning evaluation during a gap (B7).
+    coverage = sync_svc.coverage(session, sync_svc.mailbox_key_for(mode), now)
+    if coverage.gap_open and not handoff:
+        return Verdict(Outcome.DEFERRED, DeferralReason.SYNC_GAP)
+    if message.cancel_requested_at is not None:
+        return Verdict(Outcome.BLOCKED, "cancel_requested", invalidate=True)
+    state = CampaignState(campaign.state)
+    if state in STOPPED_STATES or state is CampaignState.CANDIDATE:
+        return Verdict(Outcome.BLOCKED, "campaign_not_sendable")
+    if state is CampaignState.PAUSED_REVIEW or campaign_svc.open_reasons(session, campaign.id):
+        return Verdict(Outcome.DEFERRED, DeferralReason.CAMPAIGN_NOT_SENDABLE)
+    if message.step > 1 and campaign.sequence_stopped:
+        return Verdict(Outcome.DEFERRED, DeferralReason.SEQUENCE_STOPPED)
+    if message.step > 1 and not handoff:
+        first_thread = session.scalar(
+            select(Message.gmail_thread_id).where(
+                Message.campaign_id == campaign.id, Message.step == 1
+            )
+        )
+        refs = send_results.verified_references(session, campaign.id, message.step)
+        if refs is None or refs != content.references or content.thread_id != first_thread:
+            # Approval requires verified headers; anything else re-approves (M06).
+            return Verdict(Outcome.BLOCKED, "thread_headers_unverified", invalidate=True)
+    if content.test_override is not None and mode is not Mode.TRANSPORT_TEST:
+        return Verdict(Outcome.BLOCKED, "override_outside_transport_test", invalidate=True)
+    if not approvals.dependencies_current(session, snapshot.id):
+        return Verdict(Outcome.BLOCKED, "dependency_changed", invalidate=True)
+    if content.send_channel is not channel:
+        return Verdict(Outcome.BLOCKED, "mailbox_channel_mismatch")
+    if mode.is_real:
+        # The active mailbox decides the channel; switching it is setup-only (S2, M02).
+        active = approvals.active_channel(session)
+        if active is None:
+            return Verdict(Outcome.BLOCKED, "mailbox_not_connected")
+        if active is not channel:
+            return Verdict(Outcome.BLOCKED, "mailbox_channel_mismatch")
+    elif channel is not Channel.SANDBOX:
+        return Verdict(Outcome.BLOCKED, "mailbox_channel_mismatch")
+    pi = session.get(Pi, campaign.pi_id)
+    assert pi is not None
+    institution = session.get(Institution, pi.institution_id)
+    assert institution is not None
+    if not institution.tz_verified or institution.iana_tz != content.pi_timezone:
+        return Verdict(Outcome.BLOCKED, "timezone_unverified", invalidate=True)
+    if not pi.salutation_reviewed:
+        return Verdict(Outcome.BLOCKED, "salutation_not_reviewed", invalidate=True)
+    extra = (content.to,) if mode is Mode.TRANSPORT_TEST else ()
+    if dnc.matches(session, pi.id, mode, extra):
+        return Verdict(Outcome.BLOCKED, "do_not_contact", invalidate=True)
+    if approvals.duplicate_outreach(session, campaign, content.to, step=message.step):
+        # Merges, re-discovery or an identity link found after approval (even after
+        # both Email 1s went out) must never permit a second sequence.
+        return Verdict(Outcome.BLOCKED, "duplicate_outreach", invalidate=True)
+    try:
+        validate_recipient(
+            recipients.build_context(
+                session,
+                campaign=campaign,
+                pi=pi,
+                transport_kind=channel.value,
+                snapshot_to=content.to,
+                snapshot_intended=content.intended_recipient,
+                has_test_override=content.test_override is not None,
+            )
+        )
+    except RecipientError:
+        return Verdict(Outcome.BLOCKED, "recipient_invalid", invalidate=True)
+    try:
+        tz = load_zone(content.pi_timezone)
+    except SchedulingError:
+        return Verdict(Outcome.BLOCKED, "timezone_invalid", invalidate=True)
+    policy = scheduling.policy_for(snapshot, settings)
+    if message.due_at is not None and now < message.due_at:
+        return Verdict(Outcome.DEFERRED, DeferralReason.NOT_DUE)
+    if message.eligible_window_end is None or now >= message.eligible_window_end:
+        return Verdict(Outcome.DEFERRED, DeferralReason.WINDOW_PASSED)
+    if message.eligible_window_start is None or now < message.eligible_window_start:
+        return Verdict(Outcome.DEFERRED, DeferralReason.OUTSIDE_WINDOW)
+    try:
+        permitted = in_window(now, tz, policy)
+    except SchedulingError:
+        return Verdict(Outcome.BLOCKED, "no_permitted_window", invalidate=True)
+    if not permitted:
+        return Verdict(Outcome.DEFERRED, DeferralReason.OUTSIDE_WINDOW)
+    ledger = ledger_for(mode)
+    if not pacing.allows(session, ledger, now):
+        return Verdict(Outcome.DEFERRED, DeferralReason.PACING)
+    limit = (
+        settings.real_submissions_per_24h
+        if ledger is Ledger.REAL
+        else settings.sandbox_submissions_per_24h
+    )
+    if not budget.has_capacity(session, ledger, limit, now):
+        return Verdict(Outcome.DEFERRED, DeferralReason.BUDGET, cap_reason="budget_24h")
+    if message.step == 1:
+        capacity = reservations.validate_for_dispatch(session, campaign, settings, now)
+        if not capacity.ok:
+            return Verdict(
+                Outcome.DEFERRED,
+                DeferralReason.OVER_CAPACITY,
+                cap_reason="over_capacity:" + ",".join(capacity.reasons),
+            )
+    if (
+        preflight_started is not None
+        and not handoff
+        and (
+            coverage.last_gmail_coverage_at is None
+            or coverage.last_gmail_coverage_at < preflight_started
+        )
+    ):
+        return Verdict(Outcome.DEFERRED, DeferralReason.SYNC_UNAVAILABLE)
+    return None
+
+
+def apply_verdict(
+    session: Session,
+    message: Message,
+    verdict: Verdict,
+    now: datetime,
+    evaluated_at: datetime,
+) -> DispatchResult:
+    if verdict.invalidate and message.state == MessageState.APPROVED_QUEUED.value:
+        snapshot = session.get(ApprovalSnapshot, message.current_snapshot_id)
+        if snapshot is not None and snapshot.state == SnapshotState.ACTIVE.value:
+            snapshot.state, snapshot.ended_at, snapshot.end_reason = (
+                SnapshotState.INVALIDATED.value,
+                now,
+                verdict.reason,
+            )
+        campaign_svc.set_message_state(
+            session,
+            message,
+            MessageState.NEEDS_REAPPROVAL,
+            actor=Actor.GATEWAY,
+            now=now,
+            reason=verdict.reason,
+        )
+    message.last_deferral_reason = verdict.reason
+    if verdict.reason in (DeferralReason.BUDGET, DeferralReason.OVER_CAPACITY):
+        message.cap_block_reason = verdict.cap_reason
+    reason: DeferralReason | str
+    try:
+        reason = DeferralReason(verdict.reason)
+    except ValueError:
+        reason = verdict.reason
+    scheduling.record_evaluation(
+        session, message, evaluated_at, outcome=verdict.outcome.value, reason=reason
+    )
+    return DispatchResult(verdict.outcome, str(verdict.reason))
+
+
 class SendGateway:
     def __init__(
         self,
@@ -214,7 +408,7 @@ class SendGateway:
 
         transport = self._transports.get(plan.mode)
         if transport is None or transport.kind is not _expected_kind(plan.mode):
-            return self._record(plan, _Verdict(Outcome.BLOCKED, "transport_mode_mismatch"))
+            return self._record(plan, Verdict(Outcome.BLOCKED, "transport_mode_mismatch"))
 
         preflight = self._preflight(transport, plan)
         if preflight is not None:
@@ -235,11 +429,11 @@ class SendGateway:
             )
         except MimeAddressError:
             return self._record(
-                plan, _Verdict(Outcome.BLOCKED, "recipient_invalid", invalidate=True)
+                plan, Verdict(Outcome.BLOCKED, "recipient_invalid", invalidate=True)
             )
         except SnapshotError:
             return self._record(
-                plan, _Verdict(Outcome.BLOCKED, "attachment_mismatch", invalidate=True)
+                plan, Verdict(Outcome.BLOCKED, "attachment_mismatch", invalidate=True)
             )
 
         claimed = self._claim(plan, started, app_message_id, x_id, actor)
@@ -258,165 +452,21 @@ class SendGateway:
         now: datetime,
         *,
         preflight_started: datetime | None,
-    ) -> _Verdict | None:
-        snapshot = (
-            session.get(ApprovalSnapshot, message.current_snapshot_id)
-            if message.current_snapshot_id
-            else None
+    ) -> Verdict | None:
+        channel = Channel.GMAIL if Mode(message.mode).is_real else Channel.SANDBOX
+        return final_checks(
+            session, message, settings, now, preflight_started=preflight_started, channel=channel
         )
-        if snapshot is None or snapshot.state != SnapshotState.ACTIVE.value:
-            return _Verdict(Outcome.BLOCKED, "snapshot_not_active", invalidate=True)
-        try:
-            content = verify_canonical(snapshot.canonical_json, snapshot.sha256)
-        except SnapshotError:
-            return _Verdict(Outcome.BLOCKED, "snapshot_hash_mismatch", invalidate=True)
-        mode = Mode(message.mode)
-        if (content.message_id, content.mode, content.step) != (message.id, mode, message.step):
-            return _Verdict(Outcome.BLOCKED, "snapshot_mismatch", invalidate=True)
-        campaign = session.get(Campaign, message.campaign_id)
-        assert campaign is not None
-        view = runtime.get_runtime(session, now)
-        if view.active_mode is not mode:
-            return _Verdict(Outcome.DEFERRED, DeferralReason.MODE_INACTIVE)
-        if view.dispatch_paused:
-            return _Verdict(Outcome.DEFERRED, DeferralReason.PAUSED)
-        if mode.is_real and view.auth_blocked:
-            return _Verdict(Outcome.DEFERRED, DeferralReason.AUTH_REQUIRED)
-        # A mailbox-level gap is checked before any cap or pacing deferral, so a cap
-        # deferral can never be recorded as a functioning evaluation during a gap (B7).
-        coverage = sync_svc.coverage(session, sync_svc.mailbox_key_for(mode), now)
-        if coverage.gap_open:
-            return _Verdict(Outcome.DEFERRED, DeferralReason.SYNC_GAP)
-        if message.cancel_requested_at is not None:
-            return _Verdict(Outcome.BLOCKED, "cancel_requested", invalidate=True)
-        state = CampaignState(campaign.state)
-        if state in STOPPED_STATES or state is CampaignState.CANDIDATE:
-            return _Verdict(Outcome.BLOCKED, "campaign_not_sendable")
-        if state is CampaignState.PAUSED_REVIEW or campaign_svc.open_reasons(session, campaign.id):
-            return _Verdict(Outcome.DEFERRED, DeferralReason.CAMPAIGN_NOT_SENDABLE)
-        if message.step > 1 and campaign.sequence_stopped:
-            return _Verdict(Outcome.DEFERRED, DeferralReason.SEQUENCE_STOPPED)
-        if message.step > 1:
-            first_thread = session.scalar(
-                select(Message.gmail_thread_id).where(
-                    Message.campaign_id == campaign.id, Message.step == 1
-                )
-            )
-            refs = send_results.verified_references(session, campaign.id, message.step)
-            if refs is None or refs != content.references or content.thread_id != first_thread:
-                # Approval requires verified headers; anything else re-approves (M06).
-                return _Verdict(Outcome.BLOCKED, "thread_headers_unverified", invalidate=True)
-        if content.test_override is not None and mode is not Mode.TRANSPORT_TEST:
-            return _Verdict(Outcome.BLOCKED, "override_outside_transport_test", invalidate=True)
-        if not approvals.dependencies_current(session, snapshot.id):
-            return _Verdict(Outcome.BLOCKED, "dependency_changed", invalidate=True)
-        pi = session.get(Pi, campaign.pi_id)
-        assert pi is not None
-        institution = session.get(Institution, pi.institution_id)
-        assert institution is not None
-        if not institution.tz_verified or institution.iana_tz != content.pi_timezone:
-            return _Verdict(Outcome.BLOCKED, "timezone_unverified", invalidate=True)
-        if not pi.salutation_reviewed:
-            return _Verdict(Outcome.BLOCKED, "salutation_not_reviewed", invalidate=True)
-        extra = (content.to,) if mode is Mode.TRANSPORT_TEST else ()
-        if dnc.matches(session, pi.id, mode, extra):
-            return _Verdict(Outcome.BLOCKED, "do_not_contact", invalidate=True)
-        if approvals.duplicate_outreach(session, campaign, content.to, step=message.step):
-            # Merges, re-discovery or an identity link found after approval (even after
-            # both Email 1s went out) must never permit a second sequence.
-            return _Verdict(Outcome.BLOCKED, "duplicate_outreach", invalidate=True)
-        try:
-            validate_recipient(
-                recipients.build_context(
-                    session,
-                    campaign=campaign,
-                    pi=pi,
-                    transport_kind=_expected_kind(mode).value,
-                    snapshot_to=content.to,
-                    snapshot_intended=content.intended_recipient,
-                    has_test_override=content.test_override is not None,
-                )
-            )
-        except RecipientError:
-            return _Verdict(Outcome.BLOCKED, "recipient_invalid", invalidate=True)
-        try:
-            tz = load_zone(content.pi_timezone)
-        except SchedulingError:
-            return _Verdict(Outcome.BLOCKED, "timezone_invalid", invalidate=True)
-        policy = scheduling.policy_for(snapshot, settings)
-        if message.due_at is not None and now < message.due_at:
-            return _Verdict(Outcome.DEFERRED, DeferralReason.NOT_DUE)
-        if message.eligible_window_end is None or now >= message.eligible_window_end:
-            return _Verdict(Outcome.DEFERRED, DeferralReason.WINDOW_PASSED)
-        if message.eligible_window_start is None or now < message.eligible_window_start:
-            return _Verdict(Outcome.DEFERRED, DeferralReason.OUTSIDE_WINDOW)
-        try:
-            permitted = in_window(now, tz, policy)
-        except SchedulingError:
-            return _Verdict(Outcome.BLOCKED, "no_permitted_window", invalidate=True)
-        if not permitted:
-            return _Verdict(Outcome.DEFERRED, DeferralReason.OUTSIDE_WINDOW)
-        ledger = ledger_for(mode)
-        if not pacing.allows(session, ledger, now):
-            return _Verdict(Outcome.DEFERRED, DeferralReason.PACING)
-        limit = (
-            settings.real_submissions_per_24h
-            if ledger is Ledger.REAL
-            else settings.sandbox_submissions_per_24h
-        )
-        if not budget.has_capacity(session, ledger, limit, now):
-            return _Verdict(Outcome.DEFERRED, DeferralReason.BUDGET, cap_reason="budget_24h")
-        if message.step == 1:
-            capacity = reservations.validate_for_dispatch(session, campaign, settings, now)
-            if not capacity.ok:
-                return _Verdict(
-                    Outcome.DEFERRED,
-                    DeferralReason.OVER_CAPACITY,
-                    cap_reason="over_capacity:" + ",".join(capacity.reasons),
-                )
-        if preflight_started is not None and (
-            coverage.last_gmail_coverage_at is None
-            or coverage.last_gmail_coverage_at < preflight_started
-        ):
-            return _Verdict(Outcome.DEFERRED, DeferralReason.SYNC_UNAVAILABLE)
-        return None
 
+    @staticmethod
     def _apply_verdict(
-        self,
         session: Session,
         message: Message,
-        verdict: _Verdict,
+        verdict: Verdict,
         now: datetime,
         evaluated_at: datetime,
     ) -> DispatchResult:
-        if verdict.invalidate and message.state == MessageState.APPROVED_QUEUED.value:
-            snapshot = session.get(ApprovalSnapshot, message.current_snapshot_id)
-            if snapshot is not None and snapshot.state == SnapshotState.ACTIVE.value:
-                snapshot.state, snapshot.ended_at, snapshot.end_reason = (
-                    SnapshotState.INVALIDATED.value,
-                    now,
-                    verdict.reason,
-                )
-            campaign_svc.set_message_state(
-                session,
-                message,
-                MessageState.NEEDS_REAPPROVAL,
-                actor=Actor.GATEWAY,
-                now=now,
-                reason=verdict.reason,
-            )
-        message.last_deferral_reason = verdict.reason
-        if verdict.reason in (DeferralReason.BUDGET, DeferralReason.OVER_CAPACITY):
-            message.cap_block_reason = verdict.cap_reason
-        reason: DeferralReason | str
-        try:
-            reason = DeferralReason(verdict.reason)
-        except ValueError:
-            reason = verdict.reason
-        scheduling.record_evaluation(
-            session, message, evaluated_at, outcome=verdict.outcome.value, reason=reason
-        )
-        return DispatchResult(verdict.outcome, str(verdict.reason))
+        return apply_verdict(session, message, verdict, now, evaluated_at)
 
     @staticmethod
     def _changed(message: Message, plan: _Plan) -> bool:
@@ -426,7 +476,7 @@ class SendGateway:
             or message.current_snapshot_id != plan.snapshot_id
         )
 
-    def _record(self, plan: _Plan, verdict: _Verdict) -> DispatchResult:
+    def _record(self, plan: _Plan, verdict: Verdict) -> DispatchResult:
         with transaction(self._factory) as session:
             message = session.get(Message, plan.message_id)
             assert message is not None
@@ -477,27 +527,27 @@ class SendGateway:
         except DefiniteRejection as exc:
             if exc.auth_failure:
                 self._auth_block("gmail_auth_failure")
-            return self._record(plan, _Verdict(Outcome.DEFERRED, DeferralReason.AUTH_REQUIRED))
+            return self._record(plan, Verdict(Outcome.DEFERRED, DeferralReason.AUTH_REQUIRED))
         except Exception:
             return self._record(
-                plan, _Verdict(Outcome.DEFERRED, DeferralReason.TRANSPORT_UNAVAILABLE)
+                plan, Verdict(Outcome.DEFERRED, DeferralReason.TRANSPORT_UNAVAILABLE)
             )
         if plan.mode.is_real and (
             account.email.strip().lower() != plan.content.sender.lower()
             or not account.scopes >= REQUIRED_SCOPES
         ):
             self._auth_block("account_or_scope_mismatch")
-            return self._record(plan, _Verdict(Outcome.DEFERRED, DeferralReason.AUTH_REQUIRED))
+            return self._record(plan, Verdict(Outcome.DEFERRED, DeferralReason.AUTH_REQUIRED))
         sync = self._syncs.get(sync_svc.mailbox_key_for(plan.mode))
         if sync is None:
-            return self._record(plan, _Verdict(Outcome.DEFERRED, DeferralReason.SYNC_UNAVAILABLE))
+            return self._record(plan, Verdict(Outcome.DEFERRED, DeferralReason.SYNC_UNAVAILABLE))
         try:
             outcome = sync.sync_now()
         except Exception:
             outcome = sync_svc.SyncOutcome(ok=False, detail="sync raised")
         if not outcome.ok:
             reason = DeferralReason.SYNC_GAP if outcome.gap else DeferralReason.SYNC_UNAVAILABLE
-            return self._record(plan, _Verdict(Outcome.DEFERRED, reason))
+            return self._record(plan, Verdict(Outcome.DEFERRED, reason))
         if plan.step == 1:
             return self._prior_contact(transport, plan)
         return self._reply_checks(transport, plan)
@@ -507,14 +557,14 @@ class SendGateway:
             runtime.set_auth_block(session, True, reason, now=self._clock.now())
 
     def _prior_contact(self, transport: MailTransport, plan: _Plan) -> DispatchResult | None:
-        incomplete = _Verdict(Outcome.DEFERRED, DeferralReason.PRIOR_CONTACT_CHECK_INCOMPLETE)
+        incomplete = Verdict(Outcome.DEFERRED, DeferralReason.PRIOR_CONTACT_CHECK_INCOMPLETE)
         with transaction(self._factory) as session:
             message = session.get(Message, plan.message_id)
             assert message is not None
             if self._changed(message, plan):
                 return DispatchResult(Outcome.NOT_ELIGIBLE, "changed_during_preflight")
             if prior_contact.unresolved_attempt_to(session, set(plan.contact_addresses), plan.mode):
-                held = _Verdict(Outcome.DEFERRED, DeferralReason.OWN_ATTEMPT_UNRESOLVED)
+                held = Verdict(Outcome.DEFERRED, DeferralReason.OWN_ATTEMPT_UNRESOLVED)
                 return self._apply_verdict(session, message, held, self._clock.now(), plan.started)
         if plan.self_send:
             # A transport_test self-send checks connectivity only (spec §12): searching the
@@ -542,7 +592,7 @@ class SendGateway:
             if not check.complete:
                 return self._apply_verdict(session, message, incomplete, now, plan.started)
             if check.app_duplicates:
-                duplicate = _Verdict(Outcome.BLOCKED, "duplicate_outreach", invalidate=True)
+                duplicate = Verdict(Outcome.BLOCKED, "duplicate_outreach", invalidate=True)
                 return self._apply_verdict(session, message, duplicate, now, plan.started)
             if check.unacknowledged:
                 prior_contact.open_review(
@@ -559,10 +609,10 @@ class SendGateway:
         return None
 
     def _reply_checks(self, transport: MailTransport, plan: _Plan) -> DispatchResult | None:
-        incomplete = _Verdict(Outcome.DEFERRED, DeferralReason.REPLY_CHECK_INCOMPLETE)
+        incomplete = Verdict(Outcome.DEFERRED, DeferralReason.REPLY_CHECK_INCOMPLETE)
         thread_id = plan.content.thread_id
         if thread_id is None or plan.last_sent_at is None:
-            return self._record(plan, _Verdict(Outcome.BLOCKED, "thread_unknown"))
+            return self._record(plan, Verdict(Outcome.BLOCKED, "thread_unknown"))
         try:
             in_thread = transport.get_thread_metadata(thread_id)
             since = int(plan.last_sent_at.timestamp())
@@ -664,6 +714,7 @@ class SendGateway:
                 snapshot_id=snapshot.id,
                 snapshot_sha256=snapshot.sha256,
                 mode=message.mode,
+                channel=(Channel.GMAIL if plan.mode.is_real else Channel.SANDBOX).value,
                 sender=plan.content.sender,
                 recipient=plan.content.to,
                 intended_recipient=plan.content.intended_recipient,

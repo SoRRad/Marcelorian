@@ -296,7 +296,10 @@ def verify_unverified_sent(
             (m.id, Mode(m.mode))
             for m in session.scalars(
                 select(Message).where(
-                    Message.state == MessageState.SENT.value, Message.rfc_message_id.is_(None)
+                    Message.state == MessageState.SENT.value,
+                    Message.rfc_message_id.is_(None),
+                    # Outlook hand-offs have no Gmail copy to read (spec §9.8).
+                    Message.gmail_message_id.is_not(None),
                 )
             )
         ]

@@ -35,7 +35,7 @@ from marcelorian.domain.enums import (
 from marcelorian.domain.gmail_params import REQUIRED_SCOPES
 from marcelorian.domain.snapshot import TestOverride
 from marcelorian.domain.subjects import expected_subject
-from marcelorian.services import approvals, recipients, runtime
+from marcelorian.services import approvals, handoff, recipients, runtime
 from marcelorian.services.gateway import DispatchResult, SendGateway
 from marcelorian.services.sync import SandboxSync
 from marcelorian.transport.sandbox import SandboxTransport
@@ -199,6 +199,45 @@ class World:
         with transaction(self.factory) as s:
             approvals.connect_mailbox(
                 s, email, REQUIRED_SCOPES, actor=Actor.APPLICANT, now=self.clock.now()
+            )
+
+    def connect_handoff_mailbox(self, email: str = APPLICANT_EMAIL) -> None:
+        with transaction(self.factory) as s:
+            approvals.connect_handoff_mailbox(s, email, actor=Actor.APPLICANT, now=self.clock.now())
+
+    def hand_off(
+        self, message_id: int, *, prior_contact_checked: bool = True, no_reply: bool = True
+    ) -> handoff.HandoffResult:
+        with transaction(self.factory) as s:
+            message = s.get(Message, message_id)
+            assert message is not None
+            return handoff.hand_off(
+                s,
+                message,
+                handoff.Confirmations(
+                    prior_contact_checked=prior_contact_checked, no_reply=no_reply
+                ),
+                settings=load_settings(s),
+                rng=random.Random(11),
+                actor=Actor.APPLICANT,
+                now=self.clock.now(),
+            )
+
+    def handoff_sent(self, attempt_uid: str, *, edited: bool = False) -> None:
+        with transaction(self.factory) as s:
+            handoff.record_sent(
+                s,
+                attempt_uid,
+                edited=edited,
+                settings=load_settings(s),
+                actor=Actor.APPLICANT,
+                now=self.clock.now(),
+            )
+
+    def handoff_not_sent(self, attempt_uid: str, note: str | None = None) -> None:
+        with transaction(self.factory) as s:
+            handoff.record_not_sent(
+                s, attempt_uid, note=note, actor=Actor.APPLICANT, now=self.clock.now()
             )
 
     def allowlist(self, address: str) -> int:

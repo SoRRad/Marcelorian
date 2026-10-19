@@ -318,6 +318,76 @@ def record_not_invoked(
     _after_non_submission(session, campaign, message, actor=actor, now=now)
 
 
+def record_handoff_sent(
+    session: Session,
+    attempt: SendAttempt,
+    *,
+    edited: bool,
+    settings: AppSettings,
+    actor: Actor,
+    now: datetime,
+) -> None:
+    """The applicant pressed Send in Outlook and recorded it (§9.8; S4, S6).
+
+    The send time is this confirmation (provenance ``applicant_reported``); the next
+    step is scheduled from it. There are no Gmail IDs; the approved snapshot stays the
+    record, with a note when the applicant edited the email in Outlook.
+    """
+    if attempt.status != AttemptStatus.HANDED_OFF.value:
+        raise ResolutionError("only a handed-off attempt can be recorded as sent")
+    attempt.resolution, attempt.resolved_by, attempt.resolved_at = "applicant_sent", str(actor), now
+    attempt.resolution_note = "edited in Outlook before sending" if edited else None
+    finalize_sent(
+        session,
+        attempt,
+        sent_at=now,
+        provenance=SentAtProvenance.APPLICANT_REPORTED,
+        gmail_message_id=None,
+        gmail_thread_id=None,
+        settings=settings,
+        actor=actor,
+        now=now,
+    )
+
+
+def record_handoff_not_sent(
+    session: Session, attempt: SendAttempt, *, note: str | None, actor: Actor, now: datetime
+) -> None:
+    """The applicant did not send the handed-off email (§9.8; S4).
+
+    A definite non-submission recorded by the applicant: the hold is released, the
+    message needs re-approval (never a blind retry), and a cancel recorded during the
+    hand-off takes effect.
+    """
+    if attempt.status != AttemptStatus.HANDED_OFF.value:
+        raise ResolutionError("only a handed-off attempt can be recorded as not sent")
+    message, campaign, _snapshot = _context(session, attempt)
+    attempt.status = AttemptStatus.NOT_SUBMITTED.value
+    attempt.resolution = "applicant_not_sent"
+    attempt.resolution_note = (note or "").strip()[:500] or None
+    attempt.resolved_by, attempt.resolved_at = str(actor), now
+    budget.release(session, attempt.id, now, "handoff_not_sent")
+    campaign_svc.set_message_state(
+        session,
+        message,
+        MessageState.NEEDS_REAPPROVAL,
+        actor=actor,
+        now=now,
+        reason="handed off but not sent",
+    )
+    audit(
+        session,
+        at=now,
+        actor=actor,
+        entity_type="send_attempt",
+        entity_id=attempt.id,
+        action="handoff_not_sent",
+        reason=attempt.resolution_note,
+        mode=attempt.mode,
+    )
+    _after_non_submission(session, campaign, message, actor=actor, now=now)
+
+
 def resolve_confirmed_sent(
     session: Session,
     attempt: SendAttempt,

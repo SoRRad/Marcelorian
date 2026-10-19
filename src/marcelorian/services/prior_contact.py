@@ -34,7 +34,7 @@ from marcelorian.db.models import (
     SendAttempt,
 )
 from marcelorian.domain.enums import (
-    UNRESOLVED_ATTEMPT_STATES,
+    POSSIBLY_SUBMITTED_STATES,
     Actor,
     InboundClassification,
     Mode,
@@ -120,7 +120,7 @@ def unresolved_attempt_to(session: Session, addresses: set[str], mode: Mode) -> 
             .select_from(SendAttempt)
             .where(
                 func.lower(SendAttempt.recipient).in_({a.lower() for a in addresses}),
-                SendAttempt.status.in_([s.value for s in UNRESOLVED_ATTEMPT_STATES]),
+                SendAttempt.status.in_([s.value for s in POSSIBLY_SUBMITTED_STATES]),
                 SendAttempt.mode.in_(same_mailbox_modes(mode)),
             )
         )

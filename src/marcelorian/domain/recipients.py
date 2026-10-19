@@ -60,7 +60,7 @@ def normalize_address(address: str) -> str:
 @dataclass(frozen=True)
 class RecipientContext:
     mode: Mode
-    transport_kind: str  # "gmail" or "sandbox"
+    transport_kind: str  # a Channel value: "sandbox", "gmail" or "outlook_handoff"
     snapshot_to: str
     snapshot_intended: str
     has_test_override: bool
@@ -86,8 +86,8 @@ def validate_recipient(ctx: RecipientContext) -> None:
         if ctx.send_ready_address is None or to != ctx.send_ready_address:
             raise RecipientError("sandbox recipient is not the PI's send-ready address")
         return
-    if ctx.transport_kind != "gmail":
-        raise RecipientError("real modes require the Gmail transport")
+    if ctx.transport_kind not in ("gmail", "outlook_handoff"):
+        raise RecipientError("real modes require the Gmail or Outlook hand-off channel")
     if ctx.mode is Mode.LIVE:
         if ctx.has_test_override:
             raise RecipientError("live mode rejects transport-test overrides")

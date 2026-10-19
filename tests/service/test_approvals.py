@@ -179,13 +179,15 @@ def test_approval_binds_snapshot_and_dependencies(world) -> None:
 
 @pytest.mark.narrow_window
 def test_button_label_and_expected_time(world) -> None:
+    # Owner decision S1: approval never sends; the send button unlocks separately.
     camp = world.campaign(world.pi(world.institution()))
     outcome = world.approve(world.draft(camp))
-    assert outcome.button_label == "Approve and send"  # Tuesday 09:00 New York
+    assert outcome.button_label == "Approve"  # Tuesday 09:00 New York
+    assert outcome.expected_dispatch_at == world.clock.now()
     camp2 = world.campaign(world.pi(world.institution()))
     world.clock.advance(timedelta(hours=3))  # 12:00 New York
     outcome2 = world.approve(world.draft(camp2))
-    assert outcome2.button_label == "Approve and queue"
+    assert outcome2.button_label == "Approve"
     assert outcome2.expected_dispatch_at == outcome2.window.start  # Wednesday 08:00 New York
 
 

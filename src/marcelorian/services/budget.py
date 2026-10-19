@@ -43,6 +43,31 @@ def has_capacity(session: Session, ledger: Ledger, limit: int, now: datetime) ->
     return count(session, ledger, now) + 1 <= limit
 
 
+def capacity_from(session: Session, ledger: Ledger, limit: int, now: datetime) -> datetime | None:
+    """Earliest instant ``has_capacity`` turns true by ageing alone (the send-button
+    countdown, S1), or None when held entries alone fill the budget (they count until
+    resolved, so no time is known)."""
+    excess = count(session, ledger, now) + 1 - limit
+    if excess <= 0:
+        return now
+    used_at = list(
+        session.scalars(
+            select(BudgetLedger.used_at)
+            .where(
+                BudgetLedger.ledger == ledger.value,
+                BudgetLedger.status == BudgetStatus.USED.value,
+                BudgetLedger.used_at > now - WINDOW,
+            )
+            .order_by(BudgetLedger.used_at)
+        )
+    )
+    if len(used_at) < excess:
+        return None
+    oldest = used_at[excess - 1]
+    assert oldest is not None
+    return oldest + WINDOW  # counted while used_at > now - 24h
+
+
 def hold(session: Session, ledger: Ledger, attempt_id: int, now: datetime) -> BudgetLedger:
     row = BudgetLedger(
         ledger=ledger.value, attempt_id=attempt_id, status=BudgetStatus.HELD.value, held_at=now
