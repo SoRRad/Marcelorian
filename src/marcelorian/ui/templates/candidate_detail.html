@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/candidates">&larr; Candidates</a></p>
+<section class="card">
+  <h2>{{ pi.full_name }}</h2>
+  <p>{{ institution.name }}{% if institution.city or institution.state %} — {{ institution.city or "" }} {{ institution.state or "" }}{% endif %}{% if pi.department %} · {{ pi.department }}{% endif %}</p>
+  <p>Salutation: {{ pi.salutation }} {% if pi.salutation_reviewed %}<span class="badge">reviewed</span>{% endif %} · Time zone: {{ institution.iana_tz or "not set" }} {% if institution.tz_verified %}<span class="badge">verified</span>{% endif %}</p>
+  <p>Current role: {{ "verified" if pi.current_role_verified else "not verified" }}{% if pi.current_role_evidence %} <span class="note">— {{ pi.current_role_evidence }}</span>{% endif %}</p>
+  <ul>{% for e in emails %}<li>{{ e.address }} — confidence {{ e.confidence }}{% if e.ownership_verified %}, ownership verified{% endif %}{% if e.invalid %}, <span class="warn-text">invalid</span>{% endif %}{% if ready and ready.id == e.id %} <span class="badge">send-ready</span>{% endif %}{% if e.verification_evidence %}<br><span class="note">{{ e.verification_evidence }}</span>{% endif %}</li>{% endfor %}</ul>
+  {% if dnc %}<p class="alert">On your do-not-contact list.</p>{% endif %}
+  {% if busy %}<p class="warn-text">Place in use: {% for c in busy %}campaign #{{ c.id }} ({{ c.state }}){% if not loop.last %}, {% endif %}{% endfor %}. A new application here waits until that place frees.</p>{% endif %}
+  <p class="note">Drafting an email to this person comes in the next step (P2).</p>
+</section>
+
+<section class="card" id="assessment">
+  <h2>Your assessment</h2>
+  <form method="post" action="/candidates/{{ pi.id }}/assessment" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Research fit <select name="fit"><option value="">Not assessed</option>{% for v, l in fits.items() %}<option value="{{ v }}" {% if assessment and assessment.research_fit == v %}selected{% endif %}>{{ l }}</option>{% endfor %}</select></label>
+    <label>Why (optional) <textarea name="note" rows="2" maxlength="2000">{{ assessment.fit_note if assessment and assessment.fit_note else '' }}</textarea></label>
+    <button type="submit" class="primary">Save</button>
+  </form>
+  <form method="post" action="/candidates/{{ pi.id }}/skip" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if assessment and assessment.skipped %}<input type="hidden" name="skipped" value="no"><button type="submit">Show again (unskip)</button>
+    {% else %}<input type="hidden" name="skipped" value="yes"><input type="text" name="reason" maxlength="2000" placeholder="Reason (optional)"> <button type="submit">Skip this candidate</button>{% endif %}
+  </form>
+</section>
+
+<section class="card" id="evidence">
+  <h2>Public evidence</h2>
+  <form method="post" action="/candidates/{{ pi.id }}/lookup" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Look up PubMed, OpenAlex and NIH grants</button>
+    <span class="note">Free and read-only. Needs an internet connection.</span>
+  </form>
+  {% if runs %}<p class="note">{% for source, run in runs.items() %}{{ source }}: {{ "ok" if run.ok else "failed" }}{% if run.message %} ({{ run.message }}){% endif %} · {{ run.ran_at.strftime("%Y-%m-%d") }}{% if not loop.last %} — {% endif %}{% endfor %}</p>{% endif %}
+  <h3>Active NIH grants</h3>
+  <ul>{% for g in grants %}<li>{% if is_web_url(g.url) %}<a href="{{ g.url }}" target="_blank" rel="noopener noreferrer">{{ g.project_number }}</a>{% else %}{{ g.project_number }}{% endif %} — {{ g.title }} <span class="note">({{ g.organization }}, {{ g.start_date }} to {{ g.end_date }})</span></li>{% else %}<li>None found. Grant evidence can raise priority but never shows that a paid position exists.</li>{% endfor %}</ul>
+  <h3>Publications and profile</h3>
+  <ul>{% for e in evidence %}<li>{% if is_web_url(e.url) %}<a href="{{ e.url }}" target="_blank" rel="noopener noreferrer">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %} <span class="note">{{ e.venue }} {{ e.published_on }} · {{ e.source }}</span>{% if e.excerpt %}<br><span class="note">{{ e.excerpt }}</span>{% endif %}</li>{% else %}<li>No evidence yet. Use the lookup above.</li>{% endfor %}</ul>
+</section>
+
+{% if records %}
+<section class="card"><h2>From the research catalog</h2><ul>{% for r in records %}<li><a href="/research/{{ r.id }}">{{ r.name }}</a> ({{ r.external_record_id }})</li>{% endfor %}</ul></section>
+{% endif %}
+
+<section class="card" id="dnc">
+  <h2>Do not contact</h2>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  {% if dnc %}<p>This person is on your do-not-contact list.</p>{% else %}
+  <form method="post" action="/candidates/{{ pi.id }}/dnc" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Reason <input type="text" name="reason" maxlength="2000"></label>
+    <label class="check"><input type="checkbox" name="confirm" value="yes"> Never contact this person (applies in every mode)</label>
+    <button type="submit">Add to do-not-contact</button>
+  </form>{% endif %}
+</section>
+{% endblock %}

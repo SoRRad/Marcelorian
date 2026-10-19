@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, sessionmaker
 
 from marcelorian.clock import Clock
+from marcelorian.lookups.http import Fetcher
 from marcelorian.ui.security import UISession
 
 SLOGAN = "May the Force Hire You"
@@ -23,6 +24,7 @@ class UIContext:
     session_factory: sessionmaker[Session]
     clock: Clock
     current_session: Callable[[Request], UISession]
+    fetcher: Fetcher
 
     def render(self, request: Request, name: str, context: dict[str, Any]) -> HTMLResponse:
         """Render with the slogan and this session's CSRF token always present."""

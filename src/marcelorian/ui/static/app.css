@@ -52,3 +52,5 @@ button.primary kbd { color: var(--bg); border-color: var(--bg); }
 .mainnav { margin-left: auto; display: flex; gap: 1rem; }
 .mainnav a { text-decoration: none; }
 .checklist li.done { color: var(--muted); text-decoration: line-through; }
+.review label.check { flex-direction: row; gap: 0.4rem; align-items: center; }
+form.inline-buttons { display: inline; margin-left: 0.4rem; }

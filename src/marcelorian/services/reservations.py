@@ -202,22 +202,38 @@ def place_free_from(session: Session, campaign: Campaign) -> datetime:
 def same_place_conflicts(
     session: Session, campaign: Campaign, scope: str, now: datetime
 ) -> list[Campaign]:
-    """Other campaigns (same mode) occupying this campaign's place.
+    """Other campaigns (same mode) occupying this campaign's place."""
+    return place_conflicts_for_pi(
+        session, campaign.pi_id, Mode(campaign.mode), scope, now, exclude_campaign_id=campaign.id
+    )
+
+
+def place_conflicts_for_pi(
+    session: Session,
+    pi_id: int,
+    mode: Mode,
+    scope: str,
+    now: datetime,
+    exclude_campaign_id: int | None = None,
+) -> list[Campaign]:
+    """Campaigns of other PIs (this mode) occupying this PI's place.
 
     A missing department is treated as the whole institution (conservative): it
     conflicts with every department there, and a PI without one conflicts with all.
     """
-    pi = session.get(Pi, campaign.pi_id)
+    pi = session.get(Pi, pi_id)
     assert pi is not None
     stmt = (
         select(Campaign, Pi)
         .join(Pi, Pi.id == Campaign.pi_id)
         .where(
-            Campaign.mode == campaign.mode,
-            Campaign.id != campaign.id,
+            Campaign.mode == mode.value,
+            Campaign.pi_id != pi_id,
             Campaign.state.in_((*_OCCUPYING_STATES, CampaignState.SEQUENCE_COMPLETE.value)),
         )
     )
+    if exclude_campaign_id is not None:
+        stmt = stmt.where(Campaign.id != exclude_campaign_id)
     if scope == "lab":
         stmt = stmt.where(Pi.lab_group_id == pi.lab_group_id)
     else:

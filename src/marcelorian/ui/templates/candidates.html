@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Candidates</h2>
+  <p class="note">Contacts you turned into candidates from the research catalog. Each dimension is shown on its own — there is no single score. Sorted by grant evidence, your fit rating, then address quality.</p>
+  <form method="get" action="/candidates" class="filters">
+    <label>Research fit <select name="fit"><option value="">any</option>{% for v, l in fits.items() %}<option value="{{ v }}" {% if filters.fit == v %}selected{% endif %}>{{ l }}</option>{% endfor %}<option value="none" {% if filters.fit == 'none' %}selected{% endif %}>Not assessed</option></select></label>
+    <label>Grant evidence <select name="grants"><option value="">any</option><option value="yes" {% if filters.grants == 'yes' %}selected{% endif %}>Active grant</option><option value="no" {% if filters.grants == 'no' %}selected{% endif %}>None found</option></select></label>
+    <label>Address <select name="contact"><option value="">any</option><option value="A" {% if filters.contact == 'A' %}selected{% endif %}>A</option><option value="B" {% if filters.contact == 'B' %}selected{% endif %}>B</option><option value="none" {% if filters.contact == 'none' %}selected{% endif %}>Not send-ready</option></select></label>
+    <label>Institution <select name="institution"><option value="">any</option>{% for i in institutions %}<option value="{{ i.id }}" {% if filters.institution_id == i.id %}selected{% endif %}>{{ i.name }}</option>{% endfor %}</select></label>
+    <label>State <input type="text" name="state" maxlength="16" value="{{ filters.state }}" size="4"></label>
+    <label>Name <input type="search" name="query" maxlength="200" value="{{ filters.query }}"></label>
+    <label class="check"><input type="checkbox" name="skipped" value="yes" {% if filters.show_skipped %}checked{% endif %}> Show skipped</label>
+    <button type="submit">Filter</button> <a href="/candidates">Clear</a>
+  </form>
+</section>
+<section class="card">
+  <p>{{ rows|length }} candidate(s) · {{ mode }} mode</p>
+  <table class="research">
+    <thead><tr><th>Name</th><th>Institution</th><th>Research fit</th><th>Address</th><th>Grants</th><th>Place</th><th>Campaign</th></tr></thead>
+    <tbody>
+    {% for c in rows %}
+      <tr>
+        <td><a href="/candidates/{{ c.pi.id }}">{{ c.pi.full_name }}</a>{% if c.skipped %} <span class="badge">skipped</span>{% endif %}<br><span class="note">{{ c.summary }}</span></td>
+        <td>{{ c.institution.name }}{% if c.institution.state %}, {{ c.institution.state }}{% endif %}</td>
+        <td>{{ fits[c.fit] if c.fit else "—" }}</td>
+        <td>{{ c.confidence or "not ready" }}</td>
+        <td>{{ c.active_grants or "—" }}</td>
+        <td>{% if c.place_busy %}<span class="badge warn">in use</span>{% else %}free{% endif %}</td>
+        <td>{{ c.campaign_state or "—" }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7">No candidates yet. Confirm people in the <a href="/research/queue">verification queue</a>, then use "Turn into a contact" on their record.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

@@ -164,6 +164,7 @@ def has_local_decisions(record: ResearchRecord) -> bool:
         or record.local_verification != "unchecked"
         or bool(record.local_note)
         or bool(record.local_verification_source)
+        or record.promoted_pi_id is not None
     )
 
 

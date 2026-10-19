@@ -743,6 +743,9 @@ class ResearchRecord(Base):
     local_updated_at: Mapped[datetime | None]
     # When the current finding was made; a confirmation expires after 90 days (R3).
     local_verified_at: Mapped[datetime | None]
+    # Set when the applicant turned this record into a contact (P1 promotion).
+    promoted_pi_id: Mapped[int | None] = mapped_column(ForeignKey("pi.id"))
+    promoted_at: Mapped[datetime | None]
 
 
 class ResearchEvidence(Base):
@@ -785,3 +788,98 @@ class ResearchLink(Base):
     record_id: Mapped[int] = mapped_column(ForeignKey("research_record.id"), index=True)
     target_external_id: Mapped[str] = mapped_column(String(64), index=True)
     kind: Mapped[str] = mapped_column(String(16))
+
+
+# --------------------------------------------------------------------------- #
+# Public lookups (P1, owner decision U1; migration 0007)
+# --------------------------------------------------------------------------- #
+
+
+class Evidence(Base):
+    """Public research evidence for a PI (titles and venues; abstracts later)."""
+
+    __tablename__ = "evidence"
+    __table_args__ = (UniqueConstraint("pi_id", "source", "external_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pi_id: Mapped[int] = mapped_column(ForeignKey("pi.id"), index=True)
+    source: Mapped[str] = mapped_column(String(16))  # pubmed | openalex | applicant
+    kind: Mapped[str] = mapped_column(String(16), default="publication")
+    external_id: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(Text)
+    venue: Mapped[str] = mapped_column(String(255), default="")
+    published_on: Mapped[str] = mapped_column(String(10), default="")
+    url: Mapped[str] = mapped_column(Text, default="")
+    excerpt: Mapped[str | None] = mapped_column(Text)
+    retrieved_at: Mapped[datetime]
+
+
+class GrantEvidence(Base):
+    """Research funding evidence (spec §7): raises priority, never implies salary."""
+
+    __tablename__ = "grant_evidence"
+    __table_args__ = (UniqueConstraint("pi_id", "project_number"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pi_id: Mapped[int] = mapped_column(ForeignKey("pi.id"), index=True)
+    project_number: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(Text)
+    organization: Mapped[str] = mapped_column(String(255), default="")
+    agency: Mapped[str] = mapped_column(String(16), default="")
+    start_date: Mapped[str] = mapped_column(String(10), default="")
+    end_date: Mapped[str] = mapped_column(String(10), default="")
+    url: Mapped[str] = mapped_column(Text, default="")
+    retrieved_at: Mapped[datetime]
+
+
+class ApplicantPublication(Base):
+    """The applicant's own publications, imported and confirmed one by one (spec §4)."""
+
+    __tablename__ = "applicant_publication"
+    __table_args__ = (
+        UniqueConstraint("applicant_id", "source", "external_id"),
+        CheckConstraint("status IN ('proposed','confirmed','rejected')", name="status"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    applicant_id: Mapped[int] = mapped_column(ForeignKey("applicant_profile.id"))
+    source: Mapped[str] = mapped_column(String(16))
+    external_id: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(Text)
+    venue: Mapped[str] = mapped_column(String(255), default="")
+    published_on: Mapped[str] = mapped_column(String(10), default="")
+    url: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="proposed")
+    retrieved_at: Mapped[datetime]
+    decided_at: Mapped[datetime | None]
+
+
+class LookupRun(Base):
+    """One source's outcome for one lookup (per-source status, spec §16 Discover)."""
+
+    __tablename__ = "lookup_run"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pi_id: Mapped[int | None] = mapped_column(ForeignKey("pi.id"), index=True)
+    source: Mapped[str] = mapped_column(String(16))
+    ran_at: Mapped[datetime]
+    ok: Mapped[bool] = mapped_column(Boolean)
+    items: Mapped[int] = mapped_column(Integer, default=0)
+    message: Mapped[str] = mapped_column(Text, default="")
+
+
+class Assessment(Base):
+    """The applicant's assessment of a contact (spec §7): research fit is set by the
+    applicant (or suggested by AI later, U2); skipping hides a candidate."""
+
+    __tablename__ = "assessment"
+    __table_args__ = (
+        CheckConstraint(
+            "research_fit IS NULL OR research_fit IN ('strong','moderate','weak')",
+            name="research_fit",
+        ),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pi_id: Mapped[int] = mapped_column(ForeignKey("pi.id"), unique=True)
+    research_fit: Mapped[str | None] = mapped_column(String(16))
+    fit_source: Mapped[str] = mapped_column(String(16), default="applicant")
+    fit_note: Mapped[str | None] = mapped_column(Text)
+    skipped: Mapped[bool] = mapped_column(Boolean, default=False)
+    skip_reason: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime]

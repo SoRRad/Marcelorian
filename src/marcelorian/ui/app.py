@@ -44,8 +44,9 @@ from marcelorian.domain.research import (
     confidence,
     is_web_url,
 )
+from marcelorian.lookups.http import Fetcher, HttpFetcher
 from marcelorian.services import approvals, profile, research_seed, runtime, status
-from marcelorian.ui import routes_profile
+from marcelorian.ui import routes_contacts, routes_profile
 from marcelorian.ui.context import SLOGAN, UIContext
 from marcelorian.ui.security import SESSION_COOKIE, SecurityMiddleware, UISecurity, UISession
 
@@ -81,6 +82,7 @@ def create_app(
     session_factory: sessionmaker[Session],
     clock: Clock,
     on_dispatch_change: Callable[[], None] | None = None,
+    fetcher: Fetcher | None = None,
 ) -> Any:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     templates = _templates()
@@ -91,8 +93,9 @@ def create_app(
         session: UISession = request.scope["state"]["ui_session"]
         return session
 
-    ui = UIContext(templates, session_factory, clock, current_session)
+    ui = UIContext(templates, session_factory, clock, current_session, fetcher or HttpFetcher())
     routes_profile.register(app, ui)
+    routes_contacts.register(app, ui)
 
     @app.get("/bootstrap", response_class=HTMLResponse)
     def bootstrap_page(request: Request) -> HTMLResponse:
@@ -372,6 +375,8 @@ def create_app(
                 "error": request.query_params.get("error", ""),
                 "source_required": research_seed.SOURCE_REQUIRED,
                 "valid_days": CONFIRMATION_VALID_DAYS,
+                "promote": routes_contacts.promotion_context(db, record, today),
+                "promote_error": request.query_params.get("promote_error", ""),
             }
         return templates.TemplateResponse(request, "research_detail.html", context)
 

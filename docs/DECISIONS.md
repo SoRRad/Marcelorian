@@ -423,3 +423,37 @@ owner's written description of each finding.
     pilot (U3) there is no tray worker: the app runs while its window is open.
     Multipart CV uploads carry the CSRF token in the `X-CSRF-Token` header,
     sent by `app.js`, so the security middleware is unchanged.
+40. **Contacts from the research catalog (P1).** "Turn into a contact" on a
+    research record is allowed only for a person (not a program or shared
+    mailbox), in scope, with an address on record, confirmed by the applicant
+    within 90 days and not flagged for re-review. The applicant states where
+    the address is published: the PI's current institutional or lab page gives
+    confidence **A**, a publication from the last two years explicitly
+    attributing it to the investigator gives **B** (spec §6); the source URL
+    is recorded as ownership evidence (who, when, where). The institution is
+    reused by ROR or exact name, else created, and its time zone is set only
+    with the applicant's confirmation. A matching identity (address, ORCID or
+    OpenAlex ID) links to the existing PI instead of duplicating it; the same
+    name at the same institution requires the applicant to confirm it is a
+    different person. A live do-not-contact match blocks. Promotion creates no
+    campaign, draft, approval or reservation (`services/promotion.py`).
+41. **Free lookups (P1, U1).** PubMed E-utilities, OpenAlex and NIH RePORTER
+    run only on the applicant's click, through a client restricted to those
+    three HTTPS hosts (no user URLs), with timeouts, a 5 MB cap and polite
+    retries on 429/5xx. Network calls run outside database transactions. Each
+    source runs on its own and its outcome is recorded (`lookup_run`). Results
+    are evidence (titles, venues, dates, authors; OpenAlex profile; NIH grants)
+    and never change identifiers, addresses or recipients. Grant evidence
+    raises priority but never implies a paid position (spec §7). The
+    applicant's own publications are imported as proposed and confirmed one
+    by one. The live APIs could not be reached from the development container
+    (network policy), so parsing is tested against recorded documented shapes;
+    the first real lookup on the laptop is the live check.
+42. **Candidates (P1).** Dimensions stay separate (spec §7): research fit is
+    the applicant's Strong/Moderate/Weak (AI suggestion later, U2), contact
+    quality is the send-ready address confidence plus current-role status,
+    research funding evidence is active NIH grants, appointment funding stays
+    Unknown and opportunity stays "No opening verified" until a posting is
+    recorded. Sort: grant evidence, fit, address confidence. Skipping hides a
+    candidate; do-not-contact adds a live entry for the PI, address and
+    identifiers. The place-in-use flag uses the same-place rule (N1).
