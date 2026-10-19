@@ -375,3 +375,14 @@ owner's written description of each finding.
     `PRAGMA foreign_key_check` before committing (any violation rolls back),
     and turns enforcement back on. Tested on a populated 0001 database
     (`tests/db/test_migration_data.py`).
+37. **P0.3b guided check tool.** `marcelorian.tools.outlook_check` (owner
+    approval 2026-10-19) runs the Outlook hand-off check through the
+    production hand-off code against its own database in `--folder`. It has
+    no mail transport, so it cannot send; it opens each email (link or
+    `.eml`) and records the applicant's answers. Only the two consenting
+    addresses S and R2 are allowlisted; at most four test emails go out. A
+    transport_test schedule override (B2) makes follow-ups due one minute
+    after Email 1 is recorded as sent and keeps the window open, and pacing is
+    10–20 s in that test database only. The saved report contains no
+    addresses. Tested end to end with scripted answers
+    (`tests/tools/test_outlook_check.py`).

@@ -147,8 +147,38 @@ needs its own written approval and runs in `transport_test` between your Outlook
 address (**S**) and a second consenting address (**R2**), with synthetic text only.
 The Gmail steps above are not needed for it.
 
-Setup: connect the Outlook hand-off mailbox with S's address, complete the
-signature step (add a synthetic signature or skip), and allowlist R2 only.
+**Approved by the owner on 2026-10-19.** A guided tool runs the whole check and
+records the results; it has no mail transport, so it cannot send anything itself.
+
+**Run it on your Windows laptop (about 15 minutes):**
+
+1. Install Python 3.12 from python.org (tick "Add python.exe to PATH").
+2. Download the repository from GitHub (Code → Download ZIP) and unzip it, for
+   example to `Documents\Marcelorian`.
+3. Open Windows Terminal (or PowerShell) in that folder and run:
+
+   ```
+   py -3.12 -m venv .venv
+   .venv\Scripts\python -m pip install --require-hashes -r requirements\lock.txt
+   .venv\Scripts\python -m pip install --no-deps -e .
+   .venv\Scripts\python -m marcelorian.tools.outlook_check --folder outlook-check
+   ```
+
+4. Have Outlook on the web open (signed in as S) and R2's mailbox open in another
+   tab. Answer the questions; the tool opens each email for you.
+5. At the end it prints a redacted report (no addresses) and saves it as
+   `outlook-check\report.txt`. Paste that report back; it contains no personal data.
+
+The tool uses its own test database inside `outlook-check`; nothing else on the
+laptop is touched. Delete that folder afterwards if you like. It covers the steps
+below in this order: A (B1, B3, B6), then B (B2, B4), then C (B5). Campaign A and
+B go to R2; campaign C goes to S and is never sent.
+
+What the tool sets up (for reference): the Outlook hand-off mailbox with S's
+address, the signature step (add a synthetic signature or skip), R2 and S on the
+allowlist, transport_test mode, a schedule override so follow-ups are due one
+minute after you record Email 1 as sent, and short spacing between emails in the
+test database only.
 
 1. **Link, Email 1 to R2:** click **Open in Outlook**. Check that a new message
    opens with To, the exact subject (with the en dash) and the body filled in, and

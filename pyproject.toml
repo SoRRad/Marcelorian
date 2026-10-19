@@ -99,6 +99,7 @@ module = [
     "marcelorian.transport.*",
     "marcelorian.config.*",
     "marcelorian.platform.secrets",
+    "marcelorian.tools.*",
 ]
 strict = true
 
