@@ -123,3 +123,52 @@ def test_freshness_buckets() -> None:
 def test_only_web_urls_are_links() -> None:
     assert is_web_url("https://synthetic-eye.test/x")
     assert not is_web_url("javascript:alert(1)") and not is_web_url("") and not is_web_url(None)
+
+
+def test_confirmation_expiry_boundary() -> None:
+    from marcelorian.domain.research import confirmation_expired
+
+    today = date(2026, 10, 19)
+    assert not confirmation_expired("confirmed_current", date(2026, 7, 21), today)  # 90 days
+    assert confirmation_expired("confirmed_current", date(2026, 7, 20), today)  # 91 days
+    assert confirmation_expired("confirmed_current", None, today)
+    assert not confirmation_expired("left_institution", None, today)
+
+
+def test_expired_confirmation_drops_to_official_source_seen() -> None:
+    result = confidence(
+        facts(
+            local_verification="confirmed_current",
+            confirmation_expired=True,
+            local_verified_on=date(2026, 1, 2),
+        )
+    )
+    assert result.person == "source_checked" and result.level == "source_checked"
+    assert "2026-01-02" in result.reasons[0]
+
+
+@pytest.mark.parametrize(
+    ("changes", "tier"),
+    [
+        ({}, 1),
+        ({"email_status": "publication_attribution_observed"}, 2),
+        ({"role_status": "unverified", "verification_status": "partial_evidence"}, 2),
+        ({"contact_kind": "author_unverified"}, 2),
+        ({"record_type": "opportunity", "contact_kind": ""}, 3),
+        ({"contact_kind": "shared_mailbox", "email_is_shared": True}, 3),
+        (
+            {
+                "contact_kind": "author_unverified",
+                "role_status": "unverified",
+                "email": "",
+                "email_status": "claim_only",
+                "verification_status": "not_verified",
+            },
+            4,
+        ),
+    ],
+)
+def test_queue_tiers(changes, tier) -> None:
+    from marcelorian.domain.research import queue_tier
+
+    assert queue_tier(facts(**changes)) == tier

@@ -27,11 +27,14 @@ from marcelorian.db.engine import transaction
 from marcelorian.db.models import Campaign, CampaignPause, Pi, ResearchRecord
 from marcelorian.domain.enums import Actor
 from marcelorian.domain.research import (
+    BLOCKING_VERIFICATIONS,
+    CONFIRMATION_VALID_DAYS,
     FRESHNESS,
     LEVEL_LABELS,
     LEVELS,
     LOCAL_STATUSES,
     LOCAL_VERIFICATIONS,
+    QUEUE_TIERS,
     confidence,
     is_web_url,
 )
@@ -168,6 +171,7 @@ def create_app(
             options = research_seed.filter_options(db)
             institutions = research_seed.institution_names(db)
             last_import = next(iter(research_seed.imports(db)), None)
+            queue_total = len(research_seed.queue(db, today))
         start = (page - 1) * RESEARCH_PAGE_SIZE
         query_base = urlencode({k: v for k, v in chosen.items() if v})
         return templates.TemplateResponse(
@@ -187,9 +191,100 @@ def create_app(
                 "freshness": FRESHNESS,
                 "verifications": LOCAL_VERIFICATIONS,
                 "last_import": last_import,
+                "queue_total": queue_total,
                 "query_base": query_base,
             },
         )
+
+    @app.get("/research/queue", response_class=HTMLResponse)
+    def research_queue(request: Request) -> HTMLResponse:
+        ui_session = current_session(request)
+        params = request.query_params
+        tier = _int_param(params.get("tier"), None)
+        today = clock.now().date()
+        with transaction(session_factory) as db:
+            items = research_seed.queue(db, today, tier=tier)
+            counts = research_seed.queue_counts(research_seed.queue(db, today))
+            pos = max(0, _int_param(params.get("pos"), 0) or 0)
+            wanted = _int_param(params.get("id"), None)
+            if wanted is not None:
+                pos = next((i for i, it in enumerate(items) if it.record.id == wanted), pos)
+            item = items[pos] if pos < len(items) else None
+            context: dict[str, Any] = {
+                "slogan": SLOGAN,
+                "csrf_token": ui_session.csrf_token,
+                "item": item,
+                "pos": pos,
+                "total": len(items),
+                "tier": tier,
+                "tiers": QUEUE_TIERS,
+                "counts": counts,
+                "error": params.get("error", ""),
+                "source_required": research_seed.SOURCE_REQUIRED,
+                "verifications": LOCAL_VERIFICATIONS,
+                "level_labels": LEVEL_LABELS,
+                "is_web_url": is_web_url,
+                "blocking": BLOCKING_VERIFICATIONS,
+            }
+            if item is not None:
+                context["evidence"] = research_seed.evidence_for(db, item.record)
+                context["source_urls"] = research_seed.source_urls(item.record)
+                context["route_group"] = research_seed.route_group(db, item.record)
+        return templates.TemplateResponse(request, "research_queue.html", context)
+
+    @app.post("/research/{record_id}/quick")
+    def research_quick(
+        record_id: int,
+        verification: str = Form(...),
+        source: str = Form(""),
+        note: str = Form(""),
+        pos: int = Form(0),
+        tier: str = Form(""),
+    ) -> RedirectResponse:
+        if verification not in LOCAL_VERIFICATIONS or verification == "unchecked":
+            raise HTTPException(status_code=400, detail="unknown finding")
+        back = _queue_url(pos=pos, tier=tier)
+        with transaction(session_factory) as db:
+            try:
+                research_seed.quick_finding(
+                    db,
+                    record_id,
+                    verification=verification,
+                    source=source,
+                    note=note,
+                    now=clock.now(),
+                )
+            except LookupError as exc:
+                raise HTTPException(status_code=404) from exc
+            except ValueError as exc:
+                if str(exc) == research_seed.SOURCE_REQUIRED:
+                    return RedirectResponse(
+                        _queue_url(pos=pos, tier=tier, record_id=record_id, error="source"),
+                        status_code=303,
+                    )
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RedirectResponse(back, status_code=303)
+
+    @app.post("/research/{record_id}/reopen")
+    def research_reopen(
+        record_id: int,
+        back: str = Form("detail"),
+        pos: int = Form(0),
+        tier: str = Form(""),
+    ) -> RedirectResponse:
+        with transaction(session_factory) as db:
+            try:
+                research_seed.reopen(db, record_id, now=clock.now())
+            except LookupError as exc:
+                raise HTTPException(status_code=404) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if back == "queue":
+            # Stay on the reopened record so it can be checked again right away.
+            return RedirectResponse(
+                _queue_url(pos=pos, tier=tier, record_id=record_id), status_code=303
+            )
+        return RedirectResponse(f"/research/{record_id}", status_code=303)
 
     @app.get("/research/{record_id}", response_class=HTMLResponse)
     def research_detail(request: Request, record_id: int) -> HTMLResponse:
@@ -219,6 +314,11 @@ def create_app(
                 "statuses": LOCAL_STATUSES,
                 "verifications": LOCAL_VERIFICATIONS,
                 "is_web_url": is_web_url,
+                "blocking": BLOCKING_VERIFICATIONS,
+                "history": research_seed.history(db, record),
+                "error": request.query_params.get("error", ""),
+                "source_required": research_seed.SOURCE_REQUIRED,
+                "valid_days": CONFIRMATION_VALID_DAYS,
             }
         return templates.TemplateResponse(request, "research_detail.html", context)
 
@@ -244,10 +344,32 @@ def create_app(
             except LookupError as exc:
                 raise HTTPException(status_code=404) from exc
             except ValueError as exc:
+                if str(exc) == research_seed.SOURCE_REQUIRED:
+                    return RedirectResponse(f"/research/{record_id}?error=source", status_code=303)
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         return RedirectResponse(f"/research/{record_id}", status_code=303)
 
     return SecurityMiddleware(app, security)
+
+
+def _int_param(value: str | None, default: int | None) -> int | None:
+    try:
+        return int(value) if value not in (None, "") else default
+    except ValueError:
+        return default
+
+
+def _queue_url(
+    *, pos: int, tier: str, record_id: int | None = None, error: str | None = None
+) -> str:
+    query: dict[str, Any] = {"pos": max(0, pos)}
+    if tier.isdigit():
+        query["tier"] = tier
+    if record_id is not None:
+        query["id"] = record_id
+    if error:
+        query["error"] = error
+    return "/research/queue?" + urlencode(query)
 
 
 def _claim_text(value: Any) -> str:

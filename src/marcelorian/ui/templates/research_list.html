@@ -3,6 +3,7 @@
 <p><a href="/">&larr; Dashboard</a></p>
 <section class="card">
   <h2>Research catalog</h2>
+  <p><a class="button" href="/research/queue">Open the verification queue ({{ queue_total }} to check)</a></p>
   <p class="note">These are research leads, not recipients. Nothing here is approved to send, and the seed cannot tell whether you have contacted anyone before. Every person and address must be checked by you before an email is drafted.</p>
   {% if last_import %}<p class="note">Last import: {{ last_import.source_name }}, snapshot {{ last_import.snapshot_date }} (#{{ last_import.id }}).</p>{% else %}<p class="note">Nothing imported yet. Run <code>python -m marcelorian.tools.seed_import &lt;file&gt;</code> (dry run), then add <code>--commit</code>.</p>{% endif %}
   <form method="get" action="/research" class="filters">

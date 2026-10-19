@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/research">&larr; Research catalog</a></p>
+<section class="card">
+  <h2>Verification queue</h2>
+  <p class="note">Most sendable first. Open the official source, check the person is current faculty or an investigator there (not a fellow, resident, or someone who has left), then record what you found. Nothing here drafts or sends anything.</p>
+  <p class="tiers">
+    <a href="/research/queue" {% if tier is none %}class="current"{% endif %}>All ({{ counts.values()|sum }})</a>
+    {% for number, label in tiers.items() %}<a href="/research/queue?tier={{ number }}" {% if tier == number %}class="current"{% endif %}>{{ number }}. {{ label }} ({{ counts[number] }})</a>{% endfor %}
+  </p>
+</section>
+{% if item %}
+{% set record = item.record %}
+<section class="card">
+  <p class="note">{{ pos + 1 }} of {{ total }} · Tier {{ item.tier }}: {{ tiers[item.tier] }}</p>
+  <p class="queue-reason">{{ item.reason }}</p>
+  <h2><a href="/research/{{ record.id }}">{{ record.name or record.external_record_id }}</a></h2>
+  <p>{{ record.role or "Role not stated" }} <span class="note">({{ record.role_status or "role status unknown" }})</span> · {{ record.contact_kind or record.opportunity_status }}</p>
+  <p>{{ record.institution or "Institution unresolved" }}{% if record.city or record.state_code %} — {{ record.city }} {{ record.state_code }}{% endif %}</p>
+  <p>Email: {{ record.email or "none" }} <span class="note">({{ record.email_status or "unknown" }})</span></p>
+  <p>Confidence: <span class="level level-{{ item.confidence.level }}">{{ item.confidence.label }}</span></p>
+  {% if record.local_verification != 'unchecked' %}<p>Your current finding: <strong>{{ verifications[record.local_verification] }}</strong>{% if record.local_verified_at %} ({{ record.local_verified_at.strftime("%Y-%m-%d") }}){% endif %}{% if record.local_verification_source %} — {{ record.local_verification_source }}{% endif %}</p>{% endif %}
+  {% if record.rereview_reason %}<p class="alert">{{ record.rereview_reason }}</p>{% endif %}
+  {% if item.confidence.warnings %}<ul>{% for w in item.confidence.warnings %}<li class="warn-text">{{ w }}</li>{% endfor %}</ul>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Where to check</h2>
+  <ul>
+    {% if is_web_url(record.primary_source_url) %}<li><a href="{{ record.primary_source_url }}" target="_blank" rel="noopener noreferrer">Primary source</a></li>{% endif %}
+    {% if is_web_url(record.email_source_url) and record.email_source_url != record.primary_source_url %}<li><a href="{{ record.email_source_url }}" target="_blank" rel="noopener noreferrer">Email source</a></li>{% endif %}
+    {% for url in source_urls %}{% if is_web_url(url) and url not in (record.primary_source_url, record.email_source_url) %}<li><a href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ url }}</a></li>{% endif %}{% endfor %}
+    {% if not (is_web_url(record.primary_source_url) or source_urls) %}<li>No source link in the seed: search the institution's department faculty page.</li>{% endif %}
+  </ul>
+  {% if evidence %}<p class="note">Seen earlier: {% for e in evidence[:3] %}{{ e.field }} = {{ e.value }} ({{ e.source_type }}, {{ e.checked_on }}){% if not loop.last %}; {% endif %}{% endfor %}{% if evidence|length > 3 %} …{% endif %}</p>{% else %}<p class="warn-text">No observed evidence: everything about this record is a claim.</p>{% endif %}
+  {% if route_group %}<p class="note">Same route as: {% for other in route_group %}<a href="/research/{{ other.id }}">{{ other.name or other.external_record_id }}</a>{% if not loop.last %}, {% endif %}{% endfor %}. Approach one route only.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>What did you find?</h2>
+  {% if error == 'source' %}<p class="alert">{{ source_required }}</p>{% endif %}
+  <form method="post" action="/research/{{ record.id }}/quick" class="quick">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="pos" value="{{ pos }}">
+    <input type="hidden" name="tier" value="{{ tier if tier is not none else '' }}">
+    <label>Where you checked (URL or note; required to confirm) <input type="text" name="source" maxlength="2000" value="{{ record.local_verification_source or '' }}"></label>
+    <label>Note (optional) <input type="text" name="note" maxlength="2000"></label>
+    <div class="quick-buttons">
+      <button type="submit" name="verification" value="confirmed_current" class="primary">Confirmed current</button>
+      {% for value in ('fellow_or_trainee', 'left_institution', 'not_faculty', 'retired_or_emeritus', 'wrong_person') %}
+      <button type="submit" name="verification" value="{{ value }}">{% if record.local_verification == value %}Keep: {% endif %}{{ verifications[value].split(': ', 1)[-1]|capitalize }}</button>
+      {% endfor %}
+    </div>
+  </form>
+  <div class="quick-buttons">
+    {% if record.local_verification in blocking %}
+    <form method="post" action="/research/{{ record.id }}/reopen">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="back" value="queue"><input type="hidden" name="pos" value="{{ pos }}">
+      <input type="hidden" name="tier" value="{{ tier if tier is not none else '' }}">
+      <button type="submit">Reopen (back to not checked)</button>
+    </form>
+    {% endif %}
+    {% if pos + 1 < total %}<a class="button" href="/research/queue?pos={{ pos + 1 }}{% if tier is not none %}&amp;tier={{ tier }}{% endif %}">Skip for now &rarr;</a>{% endif %}
+    {% if pos > 0 %}<a class="button" href="/research/queue?pos={{ pos - 1 }}{% if tier is not none %}&amp;tier={{ tier }}{% endif %}">&larr; Previous</a>{% endif %}
+  </div>
+</section>
+{% else %}
+<section class="card"><p>Nothing left to check{% if tier is not none %} in this tier{% endif %}. {% if total and pos >= total %}<a href="/research/queue{% if tier is not none %}?tier={{ tier }}{% endif %}">Back to the start</a> to see records you skipped.{% endif %}</p></section>
+{% endif %}
+{% endblock %}

@@ -739,6 +739,8 @@ class ResearchRecord(Base):
     local_verification_source: Mapped[str | None] = mapped_column(Text)
     local_note: Mapped[str | None] = mapped_column(Text)
     local_updated_at: Mapped[datetime | None]
+    # When the current finding was made; a confirmation expires after 90 days (R3).
+    local_verified_at: Mapped[datetime | None]
 
 
 class ResearchEvidence(Base):

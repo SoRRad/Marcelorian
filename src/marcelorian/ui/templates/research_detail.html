@@ -29,16 +29,32 @@
 <section class="card">
   <h2>Your check</h2>
   <p class="note">Only you can confirm the person. Open an official page (department faculty list, lab page) dated this year and record what you found. An import never changes this section.</p>
+  {% if error == 'source' %}<p class="alert">{{ source_required }}</p>{% endif %}
+  {% if record.local_verification == 'confirmed_current' and record.local_verified_at %}<p class="note">Confirmed on {{ record.local_verified_at.strftime("%Y-%m-%d") }}. A confirmation is valid for {{ valid_days }} days, then the record returns to the queue to be confirmed again.</p>{% endif %}
   <form method="post" action="/research/{{ record.id }}/review" class="review">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>What you found <select name="local_verification">{% for v, label in verifications.items() %}<option value="{{ v }}" {% if record.local_verification == v %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
     <label>Triage <select name="local_status">{% for v, label in statuses.items() %}<option value="{{ v }}" {% if record.local_status == v %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-    <label>Where you checked (URL or note) <input type="text" name="source" maxlength="2000" value="{{ record.local_verification_source or '' }}"></label>
+    <label>Where you checked (URL or note; required to confirm) <input type="text" name="source" maxlength="2000" value="{{ record.local_verification_source or '' }}"></label>
     <label>Notes <textarea name="note" maxlength="2000" rows="3">{{ record.local_note or '' }}</textarea></label>
     <button type="submit">Save my check</button>
     {% if record.local_updated_at %}<span class="note">Last saved {{ record.local_updated_at.strftime("%Y-%m-%d %H:%M") }} UTC</span>{% endif %}
   </form>
+  {% if record.local_verification in blocking %}
+  <form method="post" action="/research/{{ record.id }}/reopen" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="back" value="detail">
+    <button type="submit">Reopen (back to not checked)</button>
+    <span class="note">Your finding stays in the history below.</span>
+  </form>
+  {% endif %}
 </section>
+
+{% if history %}
+<section class="card">
+  <h2>History of your checks</h2>
+  <ul>{% for event in history %}<li>{{ event.at.strftime("%Y-%m-%d %H:%M") }} UTC — {{ "Reopened" if event.action == "research_reopened" else "Saved" }}: {{ verifications.get(event.from_state, event.from_state) }} &rarr; {{ verifications.get(event.to_state, event.to_state) }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
 
 <section class="card">
   <h2>Already in Marcelorian?</h2>
