@@ -17,6 +17,10 @@
     {% for name, reason in attention %}<li>{{ name }} — {{ reason }}</li>{% else %}<li>Nothing to review.</li>{% endfor %}
   </ul>
 </section>
+<section class="card">
+  <h2>Research catalog</h2>
+  <p><a href="/research">Browse imported research leads</a> <span class="note">— leads to verify, never approved to send.</span></p>
+</section>
 <section class="card actions">
   <form method="post" action="/actions/pause"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Pause sending</button></form>
   <form method="post" action="/actions/resume"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Resume sending</button></form>

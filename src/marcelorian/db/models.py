@@ -643,3 +643,141 @@ class AuditEvent(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     detail_json: Mapped[str | None] = mapped_column(Text)
     mode: Mapped[str | None] = mapped_column(String(16))
+
+
+# --------------------------------------------------------------------------- #
+# Research catalog staging (docs/SEED_IMPORT.md; migration 0003)
+#
+# Imported research leads. Nothing here is a PI, an address, a campaign or an
+# approval: the send path never reads these tables. Seed-owned columns are
+# replaced by each import; the ``local_*`` columns belong to the applicant and
+# are never written by an import.
+# --------------------------------------------------------------------------- #
+
+_LOCAL_VERIFICATIONS = (
+    "('unchecked','confirmed_current','fellow_or_trainee','left_institution',"
+    "'not_faculty','retired_or_emeritus','wrong_person')"
+)
+
+
+class SeedImport(Base):
+    __tablename__ = "seed_import"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(64))
+    source_name: Mapped[str] = mapped_column(String(255))
+    file_sha256: Mapped[str] = mapped_column(String(64))
+    snapshot_date: Mapped[str] = mapped_column(String(10))
+    imported_at: Mapped[datetime]
+    actor: Mapped[str] = mapped_column(String(32))
+    counts_json: Mapped[str] = mapped_column(Text)
+
+
+class ResearchRecord(Base):
+    __tablename__ = "research_record"
+    __table_args__ = (
+        CheckConstraint("record_type IN ('contact','opportunity')", name="record_type"),
+        CheckConstraint(
+            "local_status IN ('unreviewed','shortlisted','set_aside')", name="local_status"
+        ),
+        CheckConstraint(f"local_verification IN {_LOCAL_VERIFICATIONS}", name="local_verification"),
+        Index("ix_research_record_dedupe", "recipient_dedupe_key"),
+        Index("ix_research_record_lane", "review_lane"),
+        Index("ix_research_record_institution", "institution_key"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # External id from the seed; never used as the primary key.
+    external_record_id: Mapped[str] = mapped_column(String(64), unique=True)
+    record_type: Mapped[str] = mapped_column(String(16))
+    contact_kind: Mapped[str] = mapped_column(String(64), default="")
+    name: Mapped[str] = mapped_column(Text, default="")
+    institution: Mapped[str] = mapped_column(Text, default="")
+    institution_key: Mapped[str] = mapped_column(String(64), default="")  # proposal
+    institution_group_key: Mapped[str] = mapped_column(String(64), default="")  # proposal
+    city: Mapped[str] = mapped_column(String(120), default="")
+    state_code: Mapped[str] = mapped_column(String(16), default="")
+    country_code: Mapped[str] = mapped_column(String(8), default="")
+    geography_status: Mapped[str] = mapped_column(String(64), default="")
+    timezone_iana: Mapped[str] = mapped_column(String(64), default="")  # proposal only
+    timezone_status: Mapped[str] = mapped_column(String(64), default="")
+    role: Mapped[str] = mapped_column(Text, default="")
+    role_status: Mapped[str] = mapped_column(String(64), default="")
+    specialty: Mapped[str] = mapped_column(Text, default="")
+    email: Mapped[str] = mapped_column(String(320), default="")  # as published; unverified
+    email_status: Mapped[str] = mapped_column(String(64), default="")
+    email_confidence: Mapped[str] = mapped_column(String(8), default="")
+    email_source_url: Mapped[str] = mapped_column(Text, default="")
+    email_verified_on: Mapped[str] = mapped_column(String(10), default="")
+    email_is_shared: Mapped[bool | None] = mapped_column(Boolean)
+    recipient_dedupe_key: Mapped[str] = mapped_column(String(255), default="")
+    verification_status: Mapped[str] = mapped_column(String(64), default="")
+    last_verified_on: Mapped[str] = mapped_column(String(10), default="")
+    primary_source_url: Mapped[str] = mapped_column(Text, default="")
+    review_lane: Mapped[str] = mapped_column(String(64), default="")
+    priority_band: Mapped[int | None]
+    funding_status: Mapped[str] = mapped_column(String(64), default="")
+    unpaid_flag: Mapped[bool | None] = mapped_column(Boolean)
+    funding_unknown_flag: Mapped[bool | None] = mapped_column(Boolean)
+    opportunity_status: Mapped[str] = mapped_column(String(64), default="")
+    application_opens_on: Mapped[str] = mapped_column(String(10), default="")
+    application_deadline: Mapped[str] = mapped_column(String(10), default="")
+    has_eligibility_restrictions: Mapped[bool] = mapped_column(Boolean, default=False)
+    freshness_date: Mapped[str] = mapped_column(String(10), default="")
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0)
+    snapshot_date: Mapped[str] = mapped_column(String(10))
+    row_sha256: Mapped[str] = mapped_column(String(64))
+    # The complete row exactly as read, including unknown columns.
+    raw_json: Mapped[str] = mapped_column(Text)
+    excluded_reason: Mapped[str | None] = mapped_column(String(64))
+    rereview_reason: Mapped[str | None] = mapped_column(Text)
+    first_import_id: Mapped[int] = mapped_column(ForeignKey("seed_import.id"))
+    last_import_id: Mapped[int] = mapped_column(ForeignKey("seed_import.id"))
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+    # Applicant-owned: never written by an import.
+    local_status: Mapped[str] = mapped_column(String(16), default="unreviewed")
+    local_verification: Mapped[str] = mapped_column(String(32), default="unchecked")
+    local_verification_source: Mapped[str | None] = mapped_column(Text)
+    local_note: Mapped[str | None] = mapped_column(Text)
+    local_updated_at: Mapped[datetime | None]
+
+
+class ResearchEvidence(Base):
+    """Observed evidence: a source was looked at on a date (distinct from claims)."""
+
+    __tablename__ = "research_evidence"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("research_record.id"), index=True)
+    position: Mapped[int]
+    field: Mapped[str] = mapped_column(String(120), default="")
+    value: Mapped[str] = mapped_column(Text, default="")
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    source_type: Mapped[str] = mapped_column(String(120), default="")
+    source_access: Mapped[str] = mapped_column(String(64), default="")
+    checked_on: Mapped[str] = mapped_column(String(32), default="")
+    verification_origin: Mapped[str] = mapped_column(String(64), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    extra_json: Mapped[str | None] = mapped_column(Text)  # unknown keys, kept verbatim
+
+
+class ResearchClaim(Base):
+    """Unverified claim carried from imported inputs; never treated as evidence."""
+
+    __tablename__ = "research_claim"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("research_record.id"), index=True)
+    key: Mapped[str] = mapped_column(String(120))
+    value_json: Mapped[str] = mapped_column(Text)
+
+
+class ResearchLink(Base):
+    """A relationship to another staged record, by external id (validated at import)."""
+
+    __tablename__ = "research_link"
+    __table_args__ = (
+        UniqueConstraint("record_id", "target_external_id", "kind"),
+        CheckConstraint("kind IN ('related','same_recipient')", name="kind"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    record_id: Mapped[int] = mapped_column(ForeignKey("research_record.id"), index=True)
+    target_external_id: Mapped[str] = mapped_column(String(64), index=True)
+    kind: Mapped[str] = mapped_column(String(16))

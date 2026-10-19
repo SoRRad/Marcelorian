@@ -177,6 +177,7 @@ Discovery is applicant-triggered, runs in the background with progress, is resum
 4. **Faculty/lab pages.** Start from the config seed URLs and applicant-pasted URLs. Bounded same-site navigation (e.g., depth ≤ 2, ≤ 30 pages per site). Never invent URLs and never use a paid search service. When a page cannot be fetched, the applicant can verify manually.
 5. **ClinicalTrials.gov API v2:** optional, best-effort enrichment. It must never block or delay sources 1–4.
 6. **Posted opportunities (v1 = manual entry):** URL, title, institution, PI if named, compensation (explicitly paid / explicitly unpaid / not stated), requirements, deadline, and the formal application route. That route is tracked separately; an email never replaces a required formal application.
+7. **Research-catalog seed (staging only).** A reviewed seed CSV (`marcelorian_seed_v1`) can be imported into research staging as non-authorizing leads, with evidence kept apart from claims and the applicant's own verification of each person (docs/SEED_IMPORT.md, decision note 38). Staged leads are never recipients; promotion goes through the identity, affiliation and email rules below.
 
 ### Identity and affiliation
 - Deduplicate by OpenAlex ID / ORCID, then name + institution, with applicant confirmation for uncertain merges.

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/research">&larr; Research catalog</a></p>
+<section class="card">
+  <h2>{{ record.name or record.external_record_id }}</h2>
+  <p>{{ record.record_type }} · {{ record.contact_kind or record.opportunity_status }} · <span class="note">{{ record.external_record_id }}</span></p>
+  <p>{{ record.role or "Role not stated" }} <span class="note">({{ record.role_status or "role status unknown" }})</span></p>
+  <p>{{ record.institution or "Institution unresolved" }}{% if record.city or record.state_code %} — {{ record.city }} {{ record.state_code }}{% endif %}
+    <br><span class="note">Institution key and time zone ({{ record.timezone_iana or "none" }}, {{ record.timezone_status or "unresolved" }}) are proposals, not verified.</span></p>
+  {% if record.excluded_reason %}<p class="alert">Out of scope: {{ record.excluded_reason }}. Not offered for outreach.</p>{% endif %}
+  {% if record.rereview_reason %}<p class="alert">{{ record.rereview_reason }}</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Confidence: <span class="level level-{{ confidence.level }}">{{ confidence.label }}</span></h2>
+  <ul>
+    <li>Person: <strong>{{ level_labels[confidence.person] }}</strong></li>
+    <li>Email: <strong>{{ level_labels[confidence.email] }}</strong>{% if record.email %} — {{ record.email }} ({{ record.email_status }}{% if record.email_confidence %}, seed grade {{ record.email_confidence }}{% endif %}{% if record.email_verified_on %}, seen {{ record.email_verified_on }}{% endif %}){% endif %}</li>
+    {% for reason in confidence.reasons %}<li class="note">{{ reason }}</li>{% endfor %}
+  </ul>
+  {% if confidence.warnings %}
+  <h3>Check before relying on this record</h3>
+  <ul>{% for w in confidence.warnings %}<li class="warn-text">{{ w }}</li>{% endfor %}</ul>
+  {% endif %}
+  <p class="note">Source freshness: {{ freshness }}{% if record.freshness_date %} (latest observation {{ record.freshness_date }}){% endif %}. Review lane and priority organize your work; they are not a hiring probability or a measure of fit.</p>
+  <p class="note">Prior contact: not checked — this seed cannot tell whether you have contacted this person before.</p>
+</section>
+
+<section class="card">
+  <h2>Your check</h2>
+  <p class="note">Only you can confirm the person. Open an official page (department faculty list, lab page) dated this year and record what you found. An import never changes this section.</p>
+  <form method="post" action="/research/{{ record.id }}/review" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>What you found <select name="local_verification">{% for v, label in verifications.items() %}<option value="{{ v }}" {% if record.local_verification == v %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label>Triage <select name="local_status">{% for v, label in statuses.items() %}<option value="{{ v }}" {% if record.local_status == v %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label>Where you checked (URL or note) <input type="text" name="source" maxlength="2000" value="{{ record.local_verification_source or '' }}"></label>
+    <label>Notes <textarea name="note" maxlength="2000" rows="3">{{ record.local_note or '' }}</textarea></label>
+    <button type="submit">Save my check</button>
+    {% if record.local_updated_at %}<span class="note">Last saved {{ record.local_updated_at.strftime("%Y-%m-%d %H:%M") }} UTC</span>{% endif %}
+  </form>
+</section>
+
+<section class="card">
+  <h2>Already in Marcelorian?</h2>
+  <ul>
+    {% if matches.dnc %}<li class="alert">On your do-not-contact list ({{ matches.dnc|length }} matching entr{{ 'y' if matches.dnc|length == 1 else 'ies' }}).</li>{% else %}<li>No do-not-contact match by address or identifier.</li>{% endif %}
+    {% if matches.pi_ids %}<li>Matches {{ matches.pi_ids|length }} PI record(s) by address or identifier.{% if matches.campaign_states %} Campaigns: {{ matches.campaign_states|join(", ") }}.{% endif %}</li>{% else %}<li>No PI record matches by address or identifier.</li>{% endif %}
+  </ul>
+</section>
+
+{% if route_group %}
+<section class="card">
+  <h2>Same application route or recipient</h2>
+  <p class="note">These records reach the same endpoint (shared mailbox, program or linked record). Approach one route, not every listed contact.</p>
+  <ul>{% for other in route_group %}<li><a href="/research/{{ other.id }}">{{ other.name or other.external_record_id }}</a> — {{ other.record_type }}, {{ other.contact_kind or other.opportunity_status }}{% if other.funding_status and other.record_type == 'opportunity' %}, funding {{ other.funding_status }}{% endif %}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if record.record_type == 'opportunity' %}
+<section class="card">
+  <h2>This opportunity</h2>
+  <p class="note">Compensation and eligibility below belong to this opportunity only, not to other roles at the institution or under its PI.</p>
+  <ul>
+    <li>Status: {{ record.opportunity_status }}{% if record.opportunity_status in ('closed_cycle', 'future_cycle') %} — stays {{ 'closed' if record.opportunity_status == 'closed_cycle' else 'future' }} until new evidence shows otherwise{% endif %}</li>
+    <li>Funding: {{ record.funding_status }}{% if record.unpaid_flag %} (unpaid){% endif %}{% if record.funding_unknown_flag %} (funding unknown){% endif %}</li>
+    <li>Opens: {{ record.application_opens_on or "—" }} · Deadline: {{ record.application_deadline or "—" }}</li>
+    <li>Eligibility restrictions stated: {{ "yes" if record.has_eligibility_restrictions else "none stated" }}</li>
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Observed evidence ({{ evidence|length }})</h2>
+  <p class="note">What a source showed on the date it was checked.</p>
+  {% if evidence %}
+  <table class="research">
+    <thead><tr><th>Field</th><th>Value</th><th>Source</th><th>Checked</th><th>Origin</th></tr></thead>
+    <tbody>{% for e in evidence %}
+      <tr><td>{{ e.field }}</td><td>{{ e.value }}{% if e.notes %}<br><span class="note">{{ e.notes }}</span>{% endif %}</td>
+        <td>{% if is_web_url(e.source_url) %}<a href="{{ e.source_url }}" target="_blank" rel="noopener noreferrer">{{ e.source_type or e.source_url }}</a>{% else %}{{ e.source_type }} {{ e.source_url }}{% endif %}{% if e.source_access %}<br><span class="note">{{ e.source_access }}</span>{% endif %}</td>
+        <td>{{ e.checked_on }}</td><td>{{ e.verification_origin }}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% else %}<p class="warn-text">No observed evidence. Everything below is an unverified claim.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Unverified claims ({{ claims|length }})</h2>
+  <p class="note">Carried from imported inputs and never treated as evidence. A claimed address is never used as a recipient.</p>
+  <table class="research"><tbody>{% for key, text in claims %}<tr><td>{{ key }}</td><td class="wrap">{{ text }}</td></tr>{% endfor %}</tbody></table>
+</section>
+
+<section class="card">
+  <h2>Sources and flags</h2>
+  <ul>{% for url in source_urls %}<li>{% if is_web_url(url) %}<a href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ url }}</a>{% else %}{{ url }}{% endif %}</li>{% else %}<li>No source URLs.</li>{% endfor %}</ul>
+  <p>{% for f in flags %}<span class="badge">{{ f }}</span> {% endfor %}</p>
+  <details><summary>All seed fields (as imported)</summary>
+    <table class="research"><tbody>{% for key, value in raw %}<tr><td>{{ key }}</td><td class="wrap">{{ value }}</td></tr>{% endfor %}</tbody></table>
+  </details>
+</section>
+{% endblock %}

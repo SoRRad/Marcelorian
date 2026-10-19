@@ -386,3 +386,20 @@ owner's written description of each finding.
     10–20 s in that test database only. The saved report contains no
     addresses. Tested end to end with scripted answers
     (`tests/tools/test_outlook_check.py`).
+38. **Research-catalog seed (owner request 2026-10-19).** A seed CSV
+    (`marcelorian_seed_v1`) is staged as non-authorizing research leads in new
+    tables (`seed_import`, `research_record`, `research_evidence`,
+    `research_claim`, `research_link`; migration 0003). There was no earlier
+    import or staging service to reuse. The import is dry-run by default,
+    refuses the whole file on any invalid row, is repeatable by external id
+    plus `row_sha256`, and writes no PI, address, institution, campaign,
+    approval, reservation, do-not-contact entry or mode. The send path never
+    reads these tables. The applicant's own findings (confirmed current, fellow
+    or trainee, left, not faculty or a consultant, retired, wrong person) live
+    in `local_*` columns that imports never write. The owner asked that
+    accuracy and confidence be clear before any email, so each record shows a
+    person and email confidence level: the seed alone reaches at most
+    "official source seen", and only the applicant's check confirms a person.
+    Promotion into `pi` / `pi_email` remains P1, through the existing evidence
+    rules (spec §6). Field mapping: `docs/SEED_IMPORT.md`. The real seed stays
+    untracked (`data/seeds/*.csv`), since the repository is public.
