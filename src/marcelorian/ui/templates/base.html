@@ -11,6 +11,12 @@
   <header class="topbar">
     <span class="brand">Marcelorian</span>
     <span class="slogan">{{ slogan }}</span>
+    {% block nav %}<nav class="mainnav">
+      <a href="/">Dashboard</a>
+      <a href="/profile">Profile</a>
+      <a href="/research">Research</a>
+      <a href="/research/queue">Verify</a>
+    </nav>{% endblock %}
   </header>
   <main>{% block content %}{% endblock %}</main>
   <script src="/static/app.js"></script>

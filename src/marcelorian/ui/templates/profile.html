@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Your profile</h2>
+  <p class="note">Only <strong>confirmed</strong> answers can appear in an email. "Save draft" keeps an answer without confirming it. Changing a confirmed answer withdraws approvals of unsent emails that used it.</p>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  {% if missing %}<p class="warn-text">Still needed before drafting: {{ missing|join(", ") }}.</p>{% else %}<p>All required answers are confirmed.</p>{% endif %}
+</section>
+{% for field in fields %}
+{% set fact = facts.get(field.key) %}
+<section class="card profile-field" id="f-{{ field.key }}">
+  <form method="post" action="/profile/fact" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="key" value="{{ field.key }}">
+    <label>{{ field.label }}{% if field.required %} *{% endif %}
+      {% if field.kind == 'choice' %}
+      <select name="value"><option value="">— choose —</option>{% for value, label in field.choices.items() %}<option value="{{ value }}" {% if fact and fact.value == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+      {% elif field.kind == 'long' %}
+      <textarea name="value" rows="3" maxlength="2000">{{ fact.value if fact else '' }}</textarea>
+      {% else %}
+      <input type="text" name="value" maxlength="2000" value="{{ fact.value if fact else '' }}" {% if field.kind == 'month' %}placeholder="2027-07"{% endif %}>
+      {% endif %}
+    </label>
+    {% if field.help %}<span class="note">{{ field.help }}</span>{% endif %}
+    <div class="quick-buttons">
+      <button type="submit" name="action" value="confirm" class="primary">Save and confirm</button>
+      <button type="submit" name="action" value="draft">Save draft</button>
+      {% if fact %}<span class="note">{{ "Confirmed" if fact.status == "confirmed" else "Draft (not confirmed)" }} · version {{ fact.version }}{% if fact.provenance != 'applicant_entered' %} · {{ fact.provenance }}{% endif %}</span>{% endif %}
+    </div>
+  </form>
+</section>
+{% endfor %}
+
+<section class="card" id="cv">
+  <h2>CV</h2>
+  <p class="note">PDF only, up to 10 MB. A new version never changes an email already approved; you can re-draft those.</p>
+  <form method="post" action="/profile/cv" enctype="multipart/form-data" data-upload class="review">
+    <input type="file" name="file" accept="application/pdf,.pdf" required>
+    <button type="submit">Upload CV</button>
+  </form>
+  <ul>{% for cv in cvs %}<li>{{ cv.filename }} — uploaded {{ cv.uploaded_at.strftime("%Y-%m-%d %H:%M") }} UTC{% if loop.first %} (latest){% endif %}</li>{% else %}<li>No CV uploaded yet.</li>{% endfor %}</ul>
+</section>
+
+<section class="card" id="signature">
+  <h2>Signature</h2>
+  <p class="note">Added to Outlook files and copied text. Outlook on the web adds your account's own signature to links, so you can leave this empty.</p>
+  <form method="post" action="/profile/signature" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Signature <textarea name="signature" rows="4" maxlength="2000">{{ signature }}</textarea></label>
+    <div class="quick-buttons"><button type="submit" class="primary">Save signature</button>
+      <span class="note">{{ "Saved" if signature_done else "Not set up yet" }}</span></div>
+  </form>
+</section>
+
+<section class="card" id="outlook">
+  <h2>Your Outlook address</h2>
+  <p class="note">The address you send from in Outlook. Marcelorian never signs in to it; you press Send yourself.</p>
+  <form method="post" action="/profile/outlook" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Email address <input type="email" name="email" maxlength="320" value="{{ mailbox.email if mailbox else '' }}" required></label>
+    <div class="quick-buttons"><button type="submit" class="primary">Save address</button>
+      {% if mailbox %}<span class="note">Saved ({{ mailbox.kind }})</span>{% endif %}</div>
+  </form>
+</section>
+{% endblock %}

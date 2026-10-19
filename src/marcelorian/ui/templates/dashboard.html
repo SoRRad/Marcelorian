@@ -5,6 +5,12 @@
   {% if runtime.dispatch_paused %}— dispatch paused ({{ runtime.pause_reason }}){% else %}— dispatch running{% endif %}
   {% if runtime.auth_blocked %}<span class="alert">Gmail needs reconnecting</span>{% endif %}
 </section>
+{% if setup|selectattr(1, "equalto", false)|list %}
+<section class="card">
+  <h2>Getting started</h2>
+  <ul class="checklist">{% for label, done, link in setup %}<li class="{{ 'done' if done else '' }}">{% if done %}{{ label }} ✓{% else %}<a href="{{ link }}">{{ label }}</a>{% endif %}</li>{% endfor %}</ul>
+</section>
+{% endif %}
 <section class="card">
   <h2>Outreach status <span class="note">({{ runtime.active_mode.value }} mode)</span></h2>
   <div class="tiles">

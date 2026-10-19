@@ -48,3 +48,7 @@ form.inline { margin-top: 0.8rem; }
 kbd { font-family: inherit; font-size: 0.75rem; border: 1px solid var(--muted); border-radius: 3px; padding: 0 0.3rem; margin-right: 0.2rem; color: var(--muted); }
 button.primary kbd { color: var(--bg); border-color: var(--bg); }
 .near { color: var(--accent); }
+.topbar { flex-wrap: wrap; }
+.mainnav { margin-left: auto; display: flex; gap: 1rem; }
+.mainnav a { text-decoration: none; }
+.checklist li.done { color: var(--muted); text-decoration: line-through; }
