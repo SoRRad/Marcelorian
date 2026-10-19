@@ -16,6 +16,9 @@ dist/
 *.db-shm
 *.log
 exports/
+
+# Research seeds name real people; the repo is public. Keep them local (docs/SEED_IMPORT.md)
+data/seeds/*.csv
 backups/
 
 # Secrets and per-machine configuration (decision A4: OAuth client config stays untracked)

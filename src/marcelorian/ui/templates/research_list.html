@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/">&larr; Dashboard</a></p>
+<section class="card">
+  <h2>Research catalog</h2>
+  <p class="note">These are research leads, not recipients. Nothing here is approved to send, and the seed cannot tell whether you have contacted anyone before. Every person and address must be checked by you before an email is drafted.</p>
+  {% if last_import %}<p class="note">Last import: {{ last_import.source_name }}, snapshot {{ last_import.snapshot_date }} (#{{ last_import.id }}).</p>{% else %}<p class="note">Nothing imported yet. Run <code>python -m marcelorian.tools.seed_import &lt;file&gt;</code> (dry run), then add <code>--commit</code>.</p>{% endif %}
+  <form method="get" action="/research" class="filters">
+    <label>Type <select name="record_type"><option value="">any</option>{% for v in options.record_type %}<option value="{{ v }}" {% if chosen.record_type == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+    <label>Review lane <select name="review_lane"><option value="">any</option>{% for v in options.review_lane %}<option value="{{ v }}" {% if chosen.review_lane == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+    <label>Institution <select name="institution_key"><option value="">any</option>{% for v in options.institution_key %}<option value="{{ v }}" {% if chosen.institution_key == v %}selected{% endif %}>{{ institutions.get(v, v) }}</option>{% endfor %}</select></label>
+    <label>Funding <select name="funding_status"><option value="">any</option>{% for v in options.funding_status %}<option value="{{ v }}" {% if chosen.funding_status == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+    <label>Eligibility restrictions <select name="restrictions"><option value="">any</option><option value="yes" {% if chosen.restrictions == 'yes' %}selected{% endif %}>stated</option><option value="no" {% if chosen.restrictions == 'no' %}selected{% endif %}>none stated</option></select></label>
+    <label>Email status <select name="email_status"><option value="">any</option>{% for v in options.email_status %}<option value="{{ v }}" {% if chosen.email_status == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+    <label>Source freshness <select name="freshness"><option value="">any</option>{% for v in freshness %}<option value="{{ v }}" {% if chosen.freshness == v %}selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+    <label>Confidence <select name="confidence"><option value="">any</option>{% for v in levels %}<option value="{{ v }}" {% if chosen.confidence == v %}selected{% endif %}>{{ level_labels[v] }}</option>{% endfor %}</select></label>
+    <label>Your check <select name="local_verification"><option value="">any</option>{% for v, label in verifications.items() %}<option value="{{ v }}" {% if chosen.local_verification == v %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label>Name or institution <input type="search" name="query" value="{{ chosen.query }}" maxlength="200"></label>
+    <button type="submit">Filter</button> <a href="/research">Clear</a>
+  </form>
+</section>
+<section class="card">
+  <p>{{ total }} record(s){% if pages > 1 %} — page {{ page }} of {{ pages }}{% endif %}</p>
+  <table class="research">
+    <thead><tr><th>Name</th><th>Type / kind</th><th>Institution (proposed)</th><th>Role</th><th>Confidence</th><th>Freshness</th><th>Your check</th><th>Lane</th></tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td><a href="/research/{{ row.record.id }}">{{ row.record.name or row.record.external_record_id }}</a>{% if row.shared_route %} <span class="badge">shared route</span>{% endif %}{% if row.record.excluded_reason %} <span class="badge warn">{{ row.record.excluded_reason }}</span>{% endif %}{% if row.record.rereview_reason %} <span class="badge warn">re-review</span>{% endif %}</td>
+        <td>{{ row.record.record_type }}<br><span class="note">{{ row.record.contact_kind or row.record.opportunity_status }}</span></td>
+        <td>{{ row.record.institution }}</td>
+        <td>{{ row.record.role or "—" }}<br><span class="note">{{ row.record.role_status }}</span></td>
+        <td><span class="level level-{{ row.confidence.level }}">{{ row.confidence.label }}</span></td>
+        <td>{{ row.freshness }}</td>
+        <td>{{ verifications[row.record.local_verification] }}</td>
+        <td>{{ row.record.review_lane }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8">No records match.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if pages > 1 %}
+  <p>
+    {% if page > 1 %}<a href="/research?{{ query_base }}{% if query_base %}&amp;{% endif %}page={{ page - 1 }}">&larr; previous</a>{% endif %}
+    {% if page < pages %}<a href="/research?{{ query_base }}{% if query_base %}&amp;{% endif %}page={{ page + 1 }}">next &rarr;</a>{% endif %}
+  </p>
+  {% endif %}
+</section>
+{% endblock %}
