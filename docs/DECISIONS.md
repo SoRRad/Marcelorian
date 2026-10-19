@@ -73,6 +73,10 @@ the disagreement is a bug to report.
 | N3 | Outreach status dashboard | Owner request (2026-10-19): contacted, responses and rate, pending, rejected, no reply, approved-not-sent, needs attention, places in use, verification progress. | §16 | Dashboard | `services/status.py`, `ui/templates/dashboard.html`; `tests/service/test_outreach_status.py` |
 | N4 | Queue speed-ups | Owner request (2026-10-19): keyboard shortcuts (1–6 findings, S skip, P previous, O open source, R reopen; paused while typing), the next record from the same source page (else institution) after a finding, progress figures. | docs/SEED_IMPORT.md | Research catalog | `ui/static/app.js`, `services/research_seed.py` (`same_page_next`, `progress`); `tests/security/test_research_queue_ui.py` |
 | N5 | Test package | Owner answer (2026-10-19): package only when everything is finished, as a no-install Windows zip from a GitHub release link, with a simple non-technical walkthrough. Not built yet. | §18 (P5) | P5 | — |
+| U1 | Lead sources | Owner answer (2026-10-19): seed files stay the main source of leads; free read-only PubMed, OpenAlex and NIH RePORTER lookups enrich a lead (recent papers, ORCID/OpenAlex IDs, active NEI grants) and import the applicant's publications, run only on the applicant's click. No faculty-page crawling in the pilot. | §6, §18 (P1) | P1 | (P1 lookups) |
+| U2 | AI help | Owner answer (2026-10-19): AI is optional. Everything works without it (templates plus applicant-written personal lines); with an Anthropic key, Claude may suggest the personal lines and CV facts with evidence for review. Practice (sandbox) uses canned drafts at no cost. | §4, §8, §16 | P2 | (P2 drafting) |
+| U3 | Channels | Owner answer (2026-10-19): Outlook hand-off only for the pilot; the applicant sends from Outlook and marks Sent / Replied / Rejected in the app. The real Gmail adapter, history sync and Gmail setup are deferred (P0.3 Gmail gate unchanged). | §9.8, §10, §16, §18 (P3) | Pilot scope | — |
+| U4 | Owner monitoring | Owner answer (2026-10-19): an always-current, Excel-friendly export (CSV plus a status summary) the tester can send to the owner, instead of a shared Google Sheet. | §13, §16 | P4 | (P4 exports) |
 
 ## P0 implementation notes (behavior chosen inside the decisions, documented here)
 
@@ -412,3 +416,10 @@ owner's written description of each finding.
     Promotion into `pi` / `pi_email` remains P1, through the existing evidence
     rules (spec §6). Field mapping: `docs/SEED_IMPORT.md`. The real seed stays
     untracked (`data/seeds/*.csv`), since the repository is public.
+39. **Launcher (P1).** `python -m marcelorian` takes the instance lock,
+    migrates the database, creates the single applicant profile, serves the UI
+    on 127.0.0.1 at a free port and opens it with a one-time sign-in link (never
+    logged). Pressing Enter in the window opens a fresh link. With the Outlook-only
+    pilot (U3) there is no tray worker: the app runs while its window is open.
+    Multipart CV uploads carry the CSRF token in the `X-CSRF-Token` header,
+    sent by `app.js`, so the security middleware is unchanged.

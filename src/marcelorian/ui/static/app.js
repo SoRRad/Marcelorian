@@ -26,3 +26,29 @@
     element.click();
   });
 })();
+
+// File uploads: a multipart form cannot carry the CSRF header, so forms marked
+// data-upload are sent with fetch and the X-CSRF-Token header from the page meta tag.
+(function () {
+  "use strict";
+  var meta = document.querySelector('meta[name="csrf-token"]');
+  document.querySelectorAll("form[data-upload]").forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var button = form.querySelector("button[type=submit]");
+      if (button) {
+        button.disabled = true;
+      }
+      fetch(form.action, {
+        method: "POST",
+        body: new FormData(form),
+        headers: { "X-CSRF-Token": meta ? meta.getAttribute("content") : "" },
+        credentials: "same-origin"
+      }).then(function (response) {
+        window.location.assign(response.url || window.location.href);
+      }).catch(function () {
+        window.location.reload();
+      });
+    });
+  });
+})();

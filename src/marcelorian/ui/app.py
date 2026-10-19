@@ -44,10 +44,11 @@ from marcelorian.domain.research import (
     confidence,
     is_web_url,
 )
-from marcelorian.services import research_seed, runtime, status
+from marcelorian.services import approvals, profile, research_seed, runtime, status
+from marcelorian.ui import routes_profile
+from marcelorian.ui.context import SLOGAN, UIContext
 from marcelorian.ui.security import SESSION_COOKIE, SecurityMiddleware, UISecurity, UISession
 
-SLOGAN = "May the Force Hire You"
 RESEARCH_PAGE_SIZE = 50
 SCOPE_LABELS = {
     "institution": "Institution (or institution group)",
@@ -89,6 +90,9 @@ def create_app(
     def current_session(request: Request) -> UISession:
         session: UISession = request.scope["state"]["ui_session"]
         return session
+
+    ui = UIContext(templates, session_factory, clock, current_session)
+    routes_profile.register(app, ui)
 
     @app.get("/bootstrap", response_class=HTMLResponse)
     def bootstrap_page(request: Request) -> HTMLResponse:
@@ -144,6 +148,7 @@ def create_app(
                 db, view.active_mode, settings.same_place_scope, clock.now()
             )
             research = research_seed.progress(db, clock.now().date())
+            setup = _setup_checklist(db, clock.now(), settings, research.total)
         return templates.TemplateResponse(
             request,
             "dashboard.html",
@@ -159,6 +164,7 @@ def create_app(
                 "scope": settings.same_place_scope,
                 "scope_labels": SCOPE_LABELS,
                 "scope_error": request.query_params.get("scope_error", ""),
+                "setup": setup,
             },
         )
 
@@ -397,6 +403,20 @@ def create_app(
         return RedirectResponse(f"/research/{record_id}", status_code=303)
 
     return SecurityMiddleware(app, security)
+
+
+def _setup_checklist(
+    db: Session, now: Any, settings: Any, research_total: int
+) -> list[tuple[str, bool, str]]:
+    """First-use steps: (label, done, link)."""
+    me = profile.applicant(db, now)
+    return [
+        ("Confirm your profile", not profile.missing_required(db, me.id), "/profile"),
+        ("Upload your CV", bool(profile.cv_versions(db, me.id)), "/profile#cv"),
+        ("Set up your signature", settings.signature_step_done, "/profile#signature"),
+        ("Add your Outlook address", approvals._active_mailbox(db) is not None, "/profile#outlook"),
+        ("Import a research seed", research_total > 0, "/research"),
+    ]
 
 
 def _int_param(value: str | None, default: int | None) -> int | None:
