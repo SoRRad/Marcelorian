@@ -15,12 +15,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 
 from marcelorian.config.settings import load_settings
-from marcelorian.db.engine import transaction
-from marcelorian.db.models import Campaign, Institution, Message, Pi, SendAttempt
-from marcelorian.domain.enums import Actor, MessageState, Mode
-from marcelorian.services import approvals, drafting, profile, runtime
-from marcelorian.services.reservations import CapacityError
 from marcelorian.config.specialty import load_specialty
+from marcelorian.db.engine import transaction
+from marcelorian.db.models import Campaign, Institution, Message, Pi, SendAttempt, Task
+from marcelorian.domain.enums import Actor, MessageState, Mode
+from marcelorian.services import approvals, drafting, profile, replies, runtime
+from marcelorian.services.reservations import CapacityError
 from marcelorian.ui.context import UIContext
 from marcelorian.ui.reasons import explain
 
@@ -266,10 +266,16 @@ def register(app: FastAPI, ui: UIContext) -> None:
             messages = db.scalars(
                 select(Message).where(Message.campaign_id == campaign.id).order_by(Message.step)
             ).all()
+            reviews = replies.open_reviews(db, campaign.id)
             context = {
                 "campaign": campaign,
                 "pi": pi,
                 "messages": messages,
+                "reviews": [(p, replies.actions_for(p)) for p in reviews],
+                "reply_tags": replies.REPLY_TAGS,
+                "practice": Mode(campaign.mode) is Mode.SANDBOX,
+                "tasks": db.scalars(select(Task).where(Task.campaign_id == campaign.id)).all(),
+                "explain": explain,
                 "draftable": drafting.draftable_step(db, campaign, now),
                 "error": request.query_params.get("error", ""),
                 "notice": request.query_params.get("notice", ""),
@@ -278,5 +284,6 @@ def register(app: FastAPI, ui: UIContext) -> None:
 
 
 def _send_context(ui: UIContext, db: Any, message: Message, now: Any) -> dict[str, Any]:
-    """What the send section shows (filled in by the hand-off/practice routes)."""
-    return {}
+    from marcelorian.ui.routes_send import send_context
+
+    return send_context(db, message, now)

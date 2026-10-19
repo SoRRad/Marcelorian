@@ -5,7 +5,7 @@
   <h2>Email {{ message.step }} to {{ pi.full_name }}</h2>
   <p class="note">{{ institution.name }} · {{ message.mode }} mode · {{ message.state.replace("_", " ") }}</p>
   {% if error %}<p class="alert">{{ error }}</p>{% endif %}
-  {% if notice == "approved" %}<p class="near">Approved. Approval never sends: open it in Outlook when the send button unlocks.</p>{% elif notice == "revoked" %}<p class="near">Approval revoked. Edit and approve again when ready.</p>{% endif %}
+  {% if notice == "sent" %}<p class="near">Recorded as sent.</p>{% elif notice == "not_sent" %}<p class="near">Recorded as not sent. Approve again when you want to send it.</p>{% elif notice == "approved" %}<p class="near">Approved. Approval never sends: open it in Outlook when the send button unlocks.</p>{% elif notice == "revoked" %}<p class="near">Approval revoked. Edit and approve again when ready.</p>{% endif %}
   <p>Subject: <strong>{{ message.draft_subject }}</strong></p>
   <pre class="email-preview">{{ message.draft_body }}</pre>
   {% if fields.get("body_edited") %}<p class="note">You edited the whole text.</p>{% endif %}

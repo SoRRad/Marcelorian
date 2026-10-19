@@ -311,6 +311,8 @@ class Campaign(Base):
     next_due_at: Mapped[datetime | None]
     created_at: Mapped[datetime]
     updated_at: Mapped[datetime]
+    #: The applicant's tag for the PI's reply (spec §10 reply tags), P2.
+    reply_tag: Mapped[str | None] = mapped_column(String(32))
 
 
 class CampaignPause(Base):
@@ -885,3 +887,17 @@ class Assessment(Base):
     skipped: Mapped[bool] = mapped_column(Boolean, default=False)
     skip_reason: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime]
+
+
+class Task(Base):
+    """Manual follow-up tasks from replies: referrals and contact-later (spec §10)."""
+
+    __tablename__ = "task"
+    __table_args__ = (CheckConstraint("kind IN ('referral','contact_later')", name="kind"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(ForeignKey("campaign.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    due_on: Mapped[str | None] = mapped_column(String(10))
+    details: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime]
+    done_at: Mapped[datetime | None]

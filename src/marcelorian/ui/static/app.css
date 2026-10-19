@@ -56,3 +56,4 @@ button.primary kbd { color: var(--bg); border-color: var(--bg); }
 form.inline-buttons { display: inline; margin-left: 0.4rem; }
 pre.email-preview { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid #30363d; border-radius: 6px; padding: 0.8rem; font-family: inherit; }
 button[disabled] { opacity: 0.5; cursor: not-allowed; }
+textarea.copy-text { width: 100%; font-family: inherit; }

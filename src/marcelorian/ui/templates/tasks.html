@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Tasks</h2>
+  <p class="note">Referrals and "contact later" reminders from replies. Enter referred people yourself; the app never reads email content.</p>
+  <ul>{% for task, campaign, pi in rows %}<li>{{ "Referral" if task.kind == "referral" else "Contact again" }}{% if task.due_on %} on {{ task.due_on }}{% endif %} — <a href="/campaigns/{{ campaign.id }}">{{ pi.full_name if pi else "campaign" }}</a>{% if task.details %}: {{ task.details }}{% endif %}
+    <form method="post" action="/tasks/{{ task.id }}/done" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Done</button></form></li>
+  {% else %}<li>No open tasks.</li>{% endfor %}</ul>
+</section>
+{% endblock %}

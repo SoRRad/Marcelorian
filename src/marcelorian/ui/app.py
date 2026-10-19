@@ -29,9 +29,10 @@ from marcelorian.config.settings import (
     load_settings,
     update_settings,
 )
+from marcelorian.config.specialty import load_specialty
 from marcelorian.db.engine import transaction
 from marcelorian.db.models import Campaign, CampaignPause, Pi, ResearchRecord
-from marcelorian.domain.enums import Actor
+from marcelorian.domain.enums import Actor, Mode
 from marcelorian.domain.research import (
     BLOCKING_VERIFICATIONS,
     CONFIRMATION_VALID_DAYS,
@@ -45,8 +46,19 @@ from marcelorian.domain.research import (
     is_web_url,
 )
 from marcelorian.lookups.http import Fetcher, HttpFetcher
-from marcelorian.services import approvals, profile, research_seed, runtime, status
-from marcelorian.ui import routes_contacts, routes_messages, routes_profile
+from marcelorian.services import (
+    approvals,
+    handoff,
+    profile,
+    replies,
+    research_seed,
+    runtime,
+    status,
+)
+from marcelorian.services.gateway import SendGateway
+from marcelorian.services.sync import SandboxSync
+from marcelorian.transport.sandbox import SandboxTransport
+from marcelorian.ui import routes_contacts, routes_messages, routes_profile, routes_send
 from marcelorian.ui.context import SLOGAN, UIContext
 from marcelorian.ui.security import SESSION_COOKIE, SecurityMiddleware, UISecurity, UISession
 
@@ -93,10 +105,20 @@ def create_app(
         session: UISession = request.scope["state"]["ui_session"]
         return session
 
-    ui = UIContext(templates, session_factory, clock, current_session, fetcher or HttpFetcher())
+    gateway = SendGateway(
+        session_factory=session_factory,
+        clock=clock,
+        transports={Mode.SANDBOX: SandboxTransport(clock)},
+        syncs={"sandbox": SandboxSync(session_factory, clock)},
+        specialty_display_name=load_specialty().display_name,
+    )
+    ui = UIContext(
+        templates, session_factory, clock, current_session, fetcher or HttpFetcher(), gateway
+    )
     routes_profile.register(app, ui)
     routes_contacts.register(app, ui)
     routes_messages.register(app, ui)
+    routes_send.register(app, ui)
 
     @app.get("/bootstrap", response_class=HTMLResponse)
     def bootstrap_page(request: Request) -> HTMLResponse:
@@ -153,6 +175,12 @@ def create_app(
             )
             research = research_seed.progress(db, clock.now().date())
             setup = _setup_checklist(db, clock.now(), settings, research.total)
+            open_handoffs = handoff.open_handoffs(db, clock.now())
+            due_tasks = [
+                t
+                for t in replies.open_tasks(db)
+                if not t.due_on or t.due_on <= clock.now().date().isoformat()
+            ]
         return templates.TemplateResponse(
             request,
             "dashboard.html",
@@ -169,6 +197,8 @@ def create_app(
                 "scope_labels": SCOPE_LABELS,
                 "scope_error": request.query_params.get("scope_error", ""),
                 "setup": setup,
+                "open_handoffs": open_handoffs,
+                "due_tasks": due_tasks,
             },
         )
 

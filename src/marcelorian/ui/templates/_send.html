@@ -1,0 +1,31 @@
+{% if send %}
+{% if send.practice %}
+  <p class="note">Practice mode: the email goes to the practice mailbox, never to the PI. The same send-time rules apply.</p>
+  {% if send.ready %}
+  <form method="post" action="/messages/{{ message.id }}/practice-send"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary">Send (practice)</button></form>
+  {% else %}
+  <p class="warn-text">Not yet: {{ send.reason }}</p>
+  {% if send.unlock_at %}<p>Unlocks at {{ send.unlock_at.strftime("%Y-%m-%d %H:%M") }} UTC{% if send.unlock_local %} ({{ send.unlock_local.strftime("%a %H:%M") }} at the PI's location){% endif %}.</p>{% endif %}
+  {% endif %}
+{% else %}
+  {% if send.ready %}
+  <p>Ready. Opening it in Outlook hands it to you; <strong>nothing is sent until you press Send in Outlook</strong>.</p>
+  <form method="post" action="/messages/{{ message.id }}/handoff" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if message.step == 1 %}
+    <label class="check"><input type="checkbox" name="confirm" value="yes" required> I searched my Outlook for {{ send.addresses|join(", ") or "this person" }} and found no earlier contact (or reviewed it here)</label>
+    {% else %}
+    <label class="check"><input type="checkbox" name="confirm" value="yes" required> I checked Outlook: the PI has not replied</label>
+    {% endif %}
+    <div class="quick-buttons">
+      <button type="submit" name="method" value="link" class="primary">Open in Outlook on the web</button>
+      <button type="submit" name="method" value="file">Download email file</button>
+      <button type="submit" name="method" value="copy">Copy the text</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="warn-text">Not yet: {{ send.reason }}</p>
+  {% if send.unlock_at %}<p>The button unlocks at {{ send.unlock_at.strftime("%Y-%m-%d %H:%M") }} UTC{% if send.unlock_local %} ({{ send.unlock_local.strftime("%a %d %b %H:%M") }} at the PI's location, {{ send.pi_zone }}){% endif %}. <a href="/messages/{{ message.id }}#send">Refresh</a></p>{% endif %}
+  {% endif %}
+{% endif %}
+{% endif %}

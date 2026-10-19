@@ -11,6 +11,15 @@
   <ul class="checklist">{% for label, done, link in setup %}<li class="{{ 'done' if done else '' }}">{% if done %}{{ label }} ✓{% else %}<a href="{{ link }}">{{ label }}</a>{% endif %}</li>{% endfor %}</ul>
 </section>
 {% endif %}
+{% if open_handoffs or due_tasks %}
+<section class="card">
+  <h2>To do now</h2>
+  <ul>
+    {% for h in open_handoffs %}<li><a href="/handoffs/{{ h.attempt_uid }}">Email {{ h.step }} is open in Outlook</a>: mark it Sent or Not sent{% if h.needs_reminder %} <span class="badge warn">over a day</span>{% endif %}</li>{% endfor %}
+    {% if due_tasks %}<li><a href="/tasks">{{ due_tasks|length }} task(s) due</a></li>{% endif %}
+  </ul>
+</section>
+{% endif %}
 <section class="card">
   <h2>Outreach status <span class="note">({{ runtime.active_mode.value }} mode)</span></h2>
   <div class="tiles">
