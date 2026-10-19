@@ -57,3 +57,10 @@ form.inline-buttons { display: inline; margin-left: 0.4rem; }
 pre.email-preview { white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid #30363d; border-radius: 6px; padding: 0.8rem; font-family: inherit; }
 button[disabled] { opacity: 0.5; cursor: not-allowed; }
 textarea.copy-text { width: 100%; font-family: inherit; }
+
+/* Claude-suggested lines and their evidence */
+.cited { margin: -0.25rem 0 0.75rem; font-size: 0.92rem; }
+.cited ul { margin: 0.25rem 0 0.25rem 1.25rem; }
+table.claims { width: 100%; border-collapse: collapse; }
+table.claims td, table.claims th { border-top: 1px solid #ddd; padding: 0.5rem; vertical-align: top; text-align: left; }
+table.claims ul { margin: 0; padding-left: 1.1rem; }

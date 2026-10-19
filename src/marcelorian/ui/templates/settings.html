@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" id="mode">
+  <h2>Mode</h2>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  {% if notice %}<p class="near">{{ notice }}</p>{% endif %}
+  <p>Now: <strong>{{ modes[runtime.active_mode.value] if runtime.active_mode.value in modes else runtime.active_mode.value }}</strong>{% if runtime.dispatch_paused %} — sending paused{% endif %}</p>
+  <h3>Before live mode</h3>
+  <ul class="checklist">
+  {% for item in readiness %}
+    <li class="{{ 'done' if item.done else '' }}">{{ "✓" if item.done else "○" }} {{ item.label }}
+    {% if item.attestation %}<form method="post" action="/settings/readiness" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="key" value="{{ item.key }}"><input type="hidden" name="value" value="{{ 'no' if item.done else 'yes' }}"><button type="submit">{{ "Undo" if item.done else "Confirm" }}</button></form>{% endif %}</li>
+  {% endfor %}
+  </ul>
+  <form method="post" action="/settings/mode" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Switch to <select name="mode">{% for value, label in modes.items() %}<option value="{{ value }}" {% if value == runtime.active_mode.value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label class="check"><input type="checkbox" name="confirm" value="yes"> I want to switch mode (this pauses sending)</label>
+    <label class="check"><input type="checkbox" name="resume" value="yes"> Resume sending right after the switch</label>
+    <button type="submit">Switch</button>
+  </form>
+  <p class="note">Practice and live data are kept apart; nothing moves between modes.</p>
+</section>
+
+<section class="card" id="practice">
+  <h2>Practice time</h2>
+  {% if runtime.active_mode.value == "sandbox" %}
+  <p>Practice clock: <strong>{{ practice_now.strftime("%a %Y-%m-%d %H:%M") }} UTC</strong>{% if practice_offset.total_seconds() > 0 %} ({{ (practice_offset.total_seconds() / 86400)|round(1) }} days ahead of real time){% endif %}</p>
+  <form method="post" action="/settings/practice-time" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" name="step" value="hour">+1 hour</button> <button type="submit" name="step" value="day">+1 day</button> <button type="submit" name="step" value="week">+1 week</button></form>
+  <p class="note">Moves only forward, and only for practice campaigns, so you can try follow-ups without waiting. Your profile and research always use real time.</p>
+  {% else %}<p class="note">Available in practice mode.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h2>Email templates</h2>
+  <p class="note">The subject is fixed. Placeholders in braces are filled for you: {salutation}, {full_name}, {current_role_phrase}, {availability}, {personalized_sentence}, {skills_line}, {contribution_line}, {funding_line}, {pi_topic}, {optional_update}, {cv_phrase}, {signature}, {signature_name}. Leave a box empty to restore the default.</p>
+  {% for step, text in templates.items() %}
+  <form method="post" action="/settings/template/{{ step }}" class="review" id="t{{ step }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Email {{ step }}<textarea name="text" rows="9" maxlength="6000">{{ text }}</textarea></label>
+    <button type="submit">Save Email {{ step }}</button>
+  </form>
+  {% endfor %}
+</section>
+
+<section class="card" id="ai">
+  <h2>Claude suggestions (optional)</h2>
+  <p>Status: <strong>{{ "On" if ai_on else "Off" }}</strong>. Without a key, you write the personal lines yourself{% if runtime.active_mode.value == "sandbox" %} or use practice text{% endif %}; everything else works the same.</p>
+  {% if ai_on %}
+  <p class="note">Used {{ ai_usage.requests }} time{{ "" if ai_usage.requests == 1 else "s" }} · {{ ai_usage.input_tokens }} input and {{ ai_usage.output_tokens }} output tokens · about ${{ "%.2f"|format(ai_usage.estimated_usd) }} so far (estimate; Anthropic's console shows the real bill).</p>
+  <form method="post" action="/settings/ai-key/remove" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Remove key</button></form>
+  {% else %}
+  <form method="post" action="/settings/ai-key" class="review" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Anthropic API key<input type="password" name="api_key" maxlength="300" autocomplete="off" spellcheck="false" placeholder="sk-ant-..."></label>
+    <button type="submit">Check and save key</button>
+  </form>
+  {% endif %}
+  <p class="note">The key is kept in the Windows Credential Manager, never in the app's files. Saving checks the key without writing any text, so it costs nothing. Each "Suggest" click is one request to {{ ai_model }} and costs a few cents.</p>
+  <p class="note">Sent to Anthropic: the PI's name and public publication titles, and your answers to: {{ ai_shared|join(", ") }}. Never sent: your visa or training status, contact details, CV, or any email text. Every suggestion must cite what it is based on, is checked by the app, and is only a draft you edit and approve.</p>
+</section>
+
+<section class="card">
+  <h2>Limits</h2>
+  <ul>
+    <li>Send window: Mon–Fri {{ settings.window_start }}–{{ settings.window_end }} at the PI's location</li>
+    <li>Up to {{ settings.real_submissions_per_24h }} emails per 24 hours; a 2–6 minute pause between emails</li>
+    <li>One active application per {{ settings.same_place_scope }} (change on the dashboard)</li>
+    <li>Up to {{ settings.new_contacts_per_institution_30d }} new contacts per institution per 30 days</li>
+  </ul>
+</section>
+{% endblock %}
