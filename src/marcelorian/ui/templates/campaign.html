@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/candidates/{{ pi.id }}">&larr; {{ pi.full_name }}</a></p>
+<section class="card">
+  <h2>Campaign with {{ pi.full_name }}</h2>
+  <p class="note">{{ campaign.mode }} mode · {{ campaign.state.replace("_", " ") }}{% if campaign.close_outcome %} ({{ campaign.close_outcome.replace("_", " ") }}){% endif %}{% if campaign.next_due_at %} · next email due {{ campaign.next_due_at.strftime("%Y-%m-%d") }}{% endif %}</p>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  {% if notice %}<p class="near">{{ notice.replace("_", " ") }}</p>{% endif %}
+  {% if draftable %}<p><a class="button" href="/campaigns/{{ campaign.id }}/draft">Draft Email {{ draftable }}</a></p>{% endif %}
+  <table class="research"><thead><tr><th>Email</th><th>State</th><th>Due</th><th>Sent</th></tr></thead><tbody>
+  {% for m in messages %}<tr><td><a href="/messages/{{ m.id }}">Email {{ m.step }}</a></td><td>{{ m.state.replace("_", " ") }}</td><td>{{ m.due_at.strftime("%Y-%m-%d") if m.due_at else "—" }}</td><td>{{ m.sent_at.strftime("%Y-%m-%d %H:%M") if m.sent_at else "—" }}</td></tr>{% else %}<tr><td colspan="4">No emails yet.</td></tr>{% endfor %}
+  </tbody></table>
+  <div class="quick-buttons">
+    {% if campaign.state == "outreach_pending" and messages and messages[0].state != "sent" %}<form method="post" action="/campaigns/{{ campaign.id }}/cancel"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Cancel Email 1 (not sent yet)</button></form>{% endif %}
+    {% if campaign.state in ("outreach_pending", "paused_review") and not campaign.sequence_stopped %}<form method="post" action="/campaigns/{{ campaign.id }}/stop"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Stop this follow-up sequence</button></form>{% endif %}
+  </div>
+  <p class="note">An email already opened in Outlook cannot be recalled by the app; mark it Sent or Not sent.</p>
+</section>
+
+{% if reviews %}
+<section class="card">
+  <h2>Needs your review</h2>
+  {% for pause, actions in reviews %}
+  <form method="post" action="/reviews/{{ pause.id }}" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="campaign_id" value="{{ campaign.id }}">
+    <p><strong>{{ pause.reason.replace("_", " ") }}</strong> <span class="note">since {{ pause.opened_at.strftime("%Y-%m-%d") }}</span></p>
+    <div class="quick-buttons">{% for key, label in actions.items() %}<button type="submit" name="action" value="{{ key }}">{{ label }}</button>{% endfor %}</div>
+  </form>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if campaign.state not in ("candidate", "closed") %}
+<section class="card" id="reply">
+  <h2>{{ "Record the PI's reply" if not practice else "Practice: replies" }}</h2>
+  {% if campaign.reply_tag %}<p>Reply recorded: <strong>{{ reply_tags[campaign.reply_tag] }}</strong></p>{% endif %}
+  {% if practice %}
+  <form method="post" action="/campaigns/{{ campaign.id }}/simulate" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" name="kind" value="reply">Simulate a PI reply</button>
+    <button type="submit" name="kind" value="auto_reply">Simulate an auto-reply</button>
+    <button type="submit" name="kind" value="delivery_notice">Simulate a delivery notice</button></form>
+  {% endif %}
+  <form method="post" action="/campaigns/{{ campaign.id }}/reply" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>What did the reply say? <select name="tag" required><option value="">— choose —</option>{% for key, label in reply_tags.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select></label>
+    <label>Contact again on (for "Contact later") <input type="date" name="later"></label>
+    <label>Note (optional; e.g. the referred person) <input type="text" name="note" maxlength="500"></label>
+    <button type="submit" class="primary">Save</button>
+    <p class="note">Recording a reply stops the follow-ups. "No opening" closes this campaign and frees the place; a positive reply keeps the place in use.</p>
+  </form>
+  {% if not practice and messages and messages[0].state != "sent" %}
+  <form method="post" action="/campaigns/{{ campaign.id }}/prior-contact" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="text" name="note" maxlength="500" placeholder="What you found (optional)"> <button type="submit">I found earlier contact with this person</button></form>
+  {% endif %}
+  <form method="post" action="/campaigns/{{ campaign.id }}/close" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="text" name="reason" maxlength="500" placeholder="Reason" required> <button type="submit">Close this campaign</button></form>
+</section>
+{% endif %}
+
+{% if tasks %}
+<section class="card"><h2>Tasks</h2><ul>{% for t in tasks %}<li>{{ t.kind.replace("_", " ") }}{% if t.due_on %} on {{ t.due_on }}{% endif %}{% if t.details %}: {{ t.details }}{% endif %}{% if t.done_at %} (done){% endif %}</li>{% endfor %}</ul></section>
+{% endif %}
+{% endblock %}

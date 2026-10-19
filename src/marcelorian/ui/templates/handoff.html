@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/messages/{{ message.id }}">&larr; Email {{ message.step }} to {{ pi.full_name }}</a></p>
+<section class="card">
+  <h2>Send it from Outlook</h2>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  {% if open %}
+  <ol>
+    {% if package.reply_in_outlook %}<li><strong>This is a follow-up:</strong> in Outlook, open your earlier email to {{ pi.full_name }}, press <em>Reply</em>, and paste the text below so it stays in the same conversation.</li>{% endif %}
+    <li>
+      {% if method == "link" and package.compose_url %}<a class="button" href="{{ package.compose_url }}" target="_blank" rel="noopener noreferrer">Open the email in Outlook on the web</a>{% if package.link_omits_attachments %}<br><span class="warn-text">The link cannot carry the CV: attach it in Outlook (or use the email file).</span>{% endif %}
+      {% elif method == "file" or not package.compose_url %}<a class="button" href="/handoffs/{{ attempt.attempt_uid }}/email.eml">Download the email file</a> <span class="note">Open it with Outlook; it opens as a new message with the CV attached.</span>
+      {% else %}<span class="note">Copy the text below into a new Outlook message to {{ package.to }}, subject "{{ package.subject }}".</span>{% endif %}
+    </li>
+    <li>Check it, make only small edits, and press <strong>Send</strong> in Outlook.</li>
+    <li>Come back and record what happened.</li>
+  </ol>
+  <p>To: <strong>{{ package.to }}</strong> · Subject: <strong>{{ package.subject }}</strong></p>
+  <textarea class="copy-text" rows="12" readonly data-copy>{{ package.body }}</textarea>
+  <p class="quick-buttons"><button type="button" data-copy-button>Copy text</button>
+    {% if method != "file" %}<a href="/handoffs/{{ attempt.attempt_uid }}/email.eml">Email file instead</a>{% endif %}
+    {% if method != "link" and package.compose_url %}<a href="{{ package.compose_url }}" target="_blank" rel="noopener noreferrer">Outlook link instead</a>{% endif %}</p>
+  <div class="quick-buttons">
+    <form method="post" action="/handoffs/{{ attempt.attempt_uid }}/sent" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="check"><input type="checkbox" name="edited" value="yes"> I made small edits</label>
+      <button type="submit" class="primary">I sent it</button></form>
+    <form method="post" action="/handoffs/{{ attempt.attempt_uid }}/not-sent" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="text" name="note" maxlength="500" placeholder="Why not (optional)"> <button type="submit">I did not send it</button></form>
+  </div>
+  <p class="note">"I did not send it" is final for this attempt. Until you record either answer, the email counts as possibly sent and no other email to this person can be opened.</p>
+  {% else %}
+  <p>This attempt is recorded as <strong>{{ attempt.status.replace("_", " ") }}</strong>.</p>
+  {% endif %}
+</section>
+{% endblock %}

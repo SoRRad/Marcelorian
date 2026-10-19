@@ -52,3 +52,24 @@
     });
   });
 })();
+
+// "Copy text" on the hand-off page.
+(function () {
+  "use strict";
+  document.querySelectorAll("[data-copy-button]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var area = document.querySelector("[data-copy]");
+      if (!area) {
+        return;
+      }
+      area.select();
+      var done = function () { button.textContent = "Copied"; };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(area.value).then(done, function () { document.execCommand("copy"); done(); });
+      } else {
+        document.execCommand("copy");
+        done();
+      }
+    });
+  });
+})();

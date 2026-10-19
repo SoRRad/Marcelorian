@@ -457,3 +457,33 @@ owner's written description of each finding.
     recorded. Sort: grant evidence, fit, address confidence. Skipping hides a
     candidate; do-not-contact adds a live entry for the PI, address and
     identifiers. The place-in-use flag uses the same-place rule (N1).
+43. **Drafting and approval (P2).** Drafts fill the spec §8.1 templates from
+    **confirmed** profile facts and reviewed PI data only; the personal lines
+    are written by the applicant (Claude suggestions are optional, U2), and
+    sandbox offers clearly labelled practice text that the checklist refuses in
+    any real mode. The closing `{signature}` renders the closing name, and the
+    signature block is added at hand-off (S8), so it never appears twice.
+    Empty optional lines (funding line, recent news) are removed; the duration
+    appears only when confirmed. Body templates are editable (unknown
+    placeholders, stray braces and a missing salutation are refused; the
+    subject stays fixed, C5). The deterministic checklist (spec §8.3) runs on
+    the saved text, including whole-body edits, and must pass before Approve;
+    `approvals.approve` then applies its own blockers and the capacity and
+    same-place rules. Approval never sends (S1).
+44. **Sending and replies (P2, Outlook-only pilot U3).** The message page shows
+    the live send status (`handoff.readiness`): a countdown to the unlock time in
+    UTC and at the PI's location, or the plain reason it is held. In real modes
+    the applicant confirms the Outlook check (no earlier contact for Email 1, no
+    reply for follow-ups) and chooses the link, the email file or copy text; the
+    hand-off runs every final check at that click. The hand-off page gives step
+    by step instructions (follow-ups: reply in Outlook and paste) and records
+    **I sent it** (optionally edited) or **I did not send it**. Practice mode
+    sends through the same gateway with the fake transport and offers simulated
+    PI replies, auto-replies and delivery notices. Reply tags: "No opening"
+    closes (the place frees, N2); "Do not contact" closes and adds an entry in
+    the live scope for real modes or the practice scope (C7); "Referral" and
+    "Contact later" create tasks; "Positive" and "Requests information" keep the
+    conversation (the place stays in use). Reviews (auto-reply, delivery notice,
+    prior contact and others) are resolved per reason; a bounce closes the
+    campaign and marks the address invalid. The dashboard lists emails open in
+    Outlook (flagged after a day) and due tasks.

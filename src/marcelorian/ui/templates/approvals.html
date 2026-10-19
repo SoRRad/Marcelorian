@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>To review <span class="note">({{ mode }} mode)</span></h2>
+  <ul>{% for m, c, p in review %}<li><a href="/messages/{{ m.id }}">Email {{ m.step }} to {{ p.full_name }}</a> — {{ m.state.replace("_", " ") }}</li>{% else %}<li>Nothing waiting for your review.</li>{% endfor %}</ul>
+</section>
+<section class="card">
+  <h2>Approved, waiting for you to send</h2>
+  <ul>{% for m, c, p in waiting %}<li><a href="/messages/{{ m.id }}">Email {{ m.step }} to {{ p.full_name }}</a> — {{ "open in Outlook: mark Sent or Not sent" if m.state == "handed_off" else "ready to open when the send time comes" }}</li>{% else %}<li>No approved emails waiting.</li>{% endfor %}</ul>
+</section>
+{% endblock %}
