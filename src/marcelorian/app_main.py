@@ -4,7 +4,9 @@
 2. Upgrades the database (migrations) and makes sure the applicant profile exists.
 3. Serves the local UI on 127.0.0.1 at a free port and opens it in the browser with
    a one-time sign-in link (the link is never logged).
-4. Keeps running until the window is closed or Ctrl+C is pressed. Pressing Enter opens
+4. Starts the background worker (startup recovery, then a check every minute: the
+   missed-window rule, due follow-up drafts, notices).
+5. Keeps running until the window is closed or Ctrl+C is pressed. Pressing Enter opens
    the app in the browser again (a sign-in link is valid for two minutes).
 
 Nothing here sends email: in the Outlook hand-off channel only the applicant's own
@@ -31,7 +33,7 @@ from marcelorian.logging_setup import UVICORN_LOG_KWARGS, configure_logging
 from marcelorian.platform.instance_lock import AlreadyRunning, InstanceLock
 from marcelorian.platform.paths import resolve_app_paths
 from marcelorian.services import profile, runtime
-from marcelorian.ui.app import create_app
+from marcelorian.ui.app import create_app, worker_of
 from marcelorian.ui.security import UISecurity
 
 log = logging.getLogger(__name__)
@@ -83,7 +85,12 @@ def main(argv: list[str] | None = None) -> int:
         port = free_port()
         security = UISecurity(HOST, port, clock)
         app = create_app(security, factory, clock)
-        return _serve(app, security, port, open_browser=not args.no_browser)
+        worker = worker_of(app)
+        worker.start()  # recovery first, then a check every minute; never sends
+        try:
+            return _serve(app, security, port, open_browser=not args.no_browser)
+        finally:
+            worker.stop()
     finally:
         lock.release()
 

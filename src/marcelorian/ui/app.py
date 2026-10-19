@@ -60,6 +60,7 @@ from marcelorian.services import (
 from marcelorian.services.ai import AnthropicClient, ClientFactory
 from marcelorian.services.gateway import SendGateway
 from marcelorian.services.sync import SandboxSync
+from marcelorian.services.worker import BackgroundWorker, notices
 from marcelorian.transport.sandbox import SandboxTransport
 from marcelorian.ui import (
     routes_contacts,
@@ -99,6 +100,13 @@ def _templates() -> Jinja2Templates:
     return templates
 
 
+def worker_of(app: Any) -> BackgroundWorker:
+    """The background worker built by ``create_app`` (the app is wrapped by the middleware)."""
+    inner: Any = app.app if isinstance(app, SecurityMiddleware) else app
+    worker: BackgroundWorker = inner.state.worker
+    return worker
+
+
 def create_app(
     security: UISecurity,
     session_factory: sessionmaker[Session],
@@ -123,13 +131,18 @@ def create_app(
             practice.load_offset(db),
             active=runtime.get_runtime(db, clock.now()).active_mode is Mode.SANDBOX,
         )
+    transports: dict[Mode, Any] = {Mode.SANDBOX: SandboxTransport(practice_clock)}
+    syncs: dict[str, Any] = {"sandbox": SandboxSync(session_factory, practice_clock)}
     gateway = SendGateway(
         session_factory=session_factory,
         clock=practice_clock,
-        transports={Mode.SANDBOX: SandboxTransport(practice_clock)},
-        syncs={"sandbox": SandboxSync(session_factory, practice_clock)},
+        transports=transports,
+        syncs=syncs,
         specialty_display_name=load_specialty().display_name,
     )
+    # Started by the launcher (app_main), never by create_app, so tests stay single-threaded.
+    worker = BackgroundWorker(session_factory, clock, practice_clock, transports, syncs)
+    app.state.worker = worker
     ui = UIContext(
         templates,
         session_factory,
@@ -140,12 +153,28 @@ def create_app(
         gateway,
         secrets or open_secret_store,
         ai_client or AnthropicClient,
+        worker,
     )
     routes_profile.register(app, ui)
     routes_contacts.register(app, ui)
     routes_messages.register(app, ui)
     routes_send.register(app, ui)
     routes_settings.register(app, ui)
+
+    @app.get("/api/notices")
+    def api_notices() -> JSONResponse:
+        with transaction(session_factory) as db:
+            found = notices(db, now=clock.now(), campaign_now=practice_clock.now())
+        return JSONResponse(
+            {
+                "notices": [
+                    {"key": n.key, "level": n.level, "text": n.text, "url": n.url, "count": n.count}
+                    for n in found
+                ],
+                "actions": sum(n.count for n in found if n.level == "action"),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/bootstrap", response_class=HTMLResponse)
     def bootstrap_page(request: Request) -> HTMLResponse:
@@ -230,6 +259,7 @@ def create_app(
         )
 
     def _after_change() -> RedirectResponse:
+        worker.wake()
         if on_dispatch_change is not None:
             on_dispatch_change()
         return RedirectResponse("/", status_code=303)

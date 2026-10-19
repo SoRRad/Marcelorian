@@ -289,6 +289,7 @@ def save(
     specialty_display_name: str,
     now: datetime,
     ai_basis: dict[str, dict[str, Any]] | None = None,
+    actor: Actor = Actor.APPLICANT,
 ) -> Message:
     """Render, then save through ``approvals.save_draft`` (which handles versions, B18).
 
@@ -321,7 +322,7 @@ def save(
             cv_version_ids=tuple(rendered.cv_ids),
             fact_ids=tuple(rendered.fact_ids),
         ),
-        actor=Actor.APPLICANT,
+        actor=actor,
         now=now,
     )
     final_sources = {k: sources.get(k, "applicant") for k in clean}

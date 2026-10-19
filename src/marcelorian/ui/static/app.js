@@ -73,3 +73,61 @@
     });
   });
 })();
+
+// Notices: the bar under the header lists what needs the applicant now. It refreshes every
+// minute, shows the count of action items in the tab title, and, when the applicant turned
+// desktop alerts on, raises a browser notification for a notice that is new or grew.
+// Text is set with textContent only; links are same-site paths from the server.
+(function () {
+  "use strict";
+  var bar = document.getElementById("notices");
+  if (!bar || !window.fetch) {
+    return;
+  }
+  var baseTitle = document.title;
+  var seen = {};
+  var first = true;
+
+  function alertsOn() {
+    return "Notification" in window && Notification.permission === "granted";
+  }
+
+  function render(data) {
+    bar.textContent = "";
+    (data.notices || []).forEach(function (notice) {
+      var link = document.createElement("a");
+      link.className = "notice notice-" + notice.level;
+      link.href = notice.url.charAt(0) === "/" ? notice.url : "/";
+      link.textContent = notice.text;
+      bar.appendChild(link);
+      var before = seen[notice.key] || 0;
+      if (!first && notice.count > before && alertsOn()) {
+        new Notification("Marcelorian", { body: notice.text, tag: notice.key });
+      }
+      seen[notice.key] = notice.count;
+    });
+    if ("Notification" in window && Notification.permission === "default" && data.notices && data.notices.length) {
+      var ask = document.createElement("button");
+      ask.type = "button";
+      ask.className = "notice-alerts";
+      ask.textContent = "Turn on desktop alerts";
+      ask.addEventListener("click", function () {
+        Notification.requestPermission().then(function () { ask.remove(); });
+      });
+      bar.appendChild(ask);
+    }
+    bar.hidden = !bar.childNodes.length;
+    document.title = data.actions ? "(" + data.actions + ") " + baseTitle : baseTitle;
+    first = false;
+  }
+
+  function refresh() {
+    fetch("/api/notices", { credentials: "same-origin", cache: "no-store" })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (data) { if (data) { render(data); } })
+      .catch(function () {});
+  }
+
+  refresh();
+  window.setInterval(refresh, 60000);
+})();
