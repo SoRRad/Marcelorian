@@ -16,6 +16,7 @@ audit of each click and deferral.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -107,16 +108,23 @@ def policy_for(snapshot: ApprovalSnapshot, settings: AppSettings) -> WindowPolic
 
 
 def apply_missed_window_rule(
-    session: Session, now: datetime, settings: AppSettings, *, actor: Actor = Actor.DISPATCHER
+    session: Session,
+    now: datetime,
+    settings: AppSettings,
+    *,
+    actor: Actor = Actor.DISPATCHER,
+    modes: Collection[Mode] | None = None,
 ) -> list[tuple[int, str]]:
+    """``modes`` limits the rule (practice messages run on practice time, others on real)."""
     results: list[tuple[int, str]] = []
-    messages = session.scalars(
-        select(Message).where(
-            Message.state == MessageState.APPROVED_QUEUED.value,
-            Message.eligible_window_end.is_not(None),
-            Message.eligible_window_end <= now,
-        )
-    ).all()
+    query = select(Message).where(
+        Message.state == MessageState.APPROVED_QUEUED.value,
+        Message.eligible_window_end.is_not(None),
+        Message.eligible_window_end <= now,
+    )
+    if modes is not None:
+        query = query.where(Message.mode.in_([m.value for m in modes]))
+    messages = session.scalars(query).all()
     for message in messages:
         snapshot = session.get(ApprovalSnapshot, message.current_snapshot_id)
         assert snapshot is not None and message.eligible_window_end is not None

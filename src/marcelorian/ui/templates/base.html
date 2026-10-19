@@ -22,6 +22,7 @@
       <a href="/settings">Settings</a>
     </nav>{% endblock %}
   </header>
+  {% if csrf_token %}<div id="notices" class="notices" hidden aria-live="polite"></div>{% endif %}
   <main>{% block content %}{% endblock %}</main>
   <script src="/static/app.js"></script>
 </body>

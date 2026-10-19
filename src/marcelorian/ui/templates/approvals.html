@@ -1,5 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
+{% if followups %}
+<section class="card" id="followups">
+  <h2>Follow-ups due</h2>
+  <p class="note">Write the personal line, save, then review. Follow-ups without personal lines are drafted for you within a minute.</p>
+  <ul>{% for c, p in followups %}<li><a href="/campaigns/{{ c.id }}/draft">Email {{ c.next_step }} to {{ p.full_name }}</a></li>{% endfor %}</ul>
+</section>
+{% endif %}
 <section class="card">
   <h2>To review <span class="note">({{ mode }} mode)</span></h2>
   <ul>{% for m, c, p in review %}<li><a href="/messages/{{ m.id }}">Email {{ m.step }} to {{ p.full_name }}</a> — {{ m.state.replace("_", " ") }}</li>{% else %}<li>Nothing waiting for your review.</li>{% endfor %}</ul>

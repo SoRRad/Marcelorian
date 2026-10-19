@@ -22,7 +22,7 @@ from marcelorian.db.models import Campaign, Institution, Message, Pi, SendAttemp
 from marcelorian.domain.enums import Actor, MessageState, Mode
 from marcelorian.lookups.enrich import evidence_for
 from marcelorian.platform.secrets import SecretStoreUnavailable
-from marcelorian.services import ai, approvals, drafting, profile, replies, runtime
+from marcelorian.services import ai, approvals, drafting, profile, replies, runtime, worker
 from marcelorian.services.reservations import CapacityError
 from marcelorian.ui.context import UIContext
 from marcelorian.ui.reasons import explain
@@ -242,10 +242,16 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 )
                 .order_by(Message.updated_at)
             ).all()
+            followups = [
+                (c, db.get(Pi, c.pi_id))
+                for c in worker.due_followups(db, mode, ui.campaign_clock.now())
+            ]
         review = [r for r in rows if r[0].state in REVIEW_STATES]
         waiting = [r for r in rows if r[0].state in WAITING_STATES]
         return ui.render(
-            request, "approvals.html", {"review": review, "waiting": waiting, "mode": mode.value}
+            request,
+            "approvals.html",
+            {"review": review, "waiting": waiting, "mode": mode.value, "followups": followups},
         )
 
     @app.get("/messages/{message_id}", response_class=HTMLResponse)

@@ -33,10 +33,11 @@ def _back(anchor: str, *, error: str | None = None, notice: str | None = None) -
 
 
 def sync_practice_clock(ui: UIContext) -> None:
-    """Keep the practice clock in step with the active mode."""
+    """Keep the practice clock in step with the active mode; the worker re-checks soon."""
     with transaction(ui.session_factory) as db:
         mode = runtime.get_runtime(db, ui.clock.now()).active_mode
     ui.campaign_clock.set_active(mode is Mode.SANDBOX)
+    ui.wake_worker()
 
 
 def register(app: FastAPI, ui: UIContext) -> None:
@@ -101,6 +102,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
         offset = ui.campaign_clock.advance(ADVANCE[step])
         with transaction(ui.session_factory) as db:
             practice.save_offset(db, offset, now=ui.clock.now())
+        ui.wake_worker()
         return _back("practice", notice="Practice time moved forward.")
 
     @app.post("/settings/template/{step}")

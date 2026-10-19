@@ -520,3 +520,26 @@ owner's written description of each finding.
     million input/output tokens. Practice mode keeps its canned text; the
     Claude button also appears there when a key is saved, so testers can try
     it knowingly (it spends their credit). Tests use fake clients only.
+47. **Background worker and notices (P3, Outlook-only pilot U3).** The
+    launcher starts one worker thread (the single-instance lock keeps it to one
+    per data folder); `create_app` only builds it, so tests stay
+    single-threaded. It never sends. On start it runs the spec §9.4 recovery
+    order (reconcile, practice sync, missed-window rule) on real time, then a
+    cycle every minute and soon after a mode switch, practice-time change or a
+    recorded send: heartbeat (one row, updated), the missed-window rule (live
+    and test messages on real time, practice messages on practice time, so
+    practice time can never roll a live approval), and due follow-up
+    generation for the active mode. A due follow-up whose template has no
+    personal lines (Emails 3 and 4 by default) is drafted by the system for
+    review, never approved; one that needs a line becomes a notice and is
+    listed under "Follow-ups due" on the Approvals page. One campaign's
+    problem never stops the others (savepoint per campaign). Notices are
+    computed from current state on request (`/api/notices`): follow-ups to
+    write, drafts to review, approved emails whose send window is open, emails
+    open in Outlook for over a day, campaigns needing a review, due tasks, and
+    a stalled worker (no heartbeat for five minutes). Every page shows them in
+    a bar that refreshes each minute and puts the action count in the tab
+    title. **Toasts:** instead of a tray icon and Windows toast libraries
+    (spec §2), the pilot uses the browser's own desktop notifications, which
+    the applicant turns on with one click; no extra dependency, and nothing
+    runs when the app is closed. A tray icon can follow after the pilot.

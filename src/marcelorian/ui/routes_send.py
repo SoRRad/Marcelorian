@@ -144,6 +144,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 )
             except (handoff.HandoffError, ValueError) as exc:
                 return _redirect(f"/handoffs/{attempt_uid}", error=str(exc))
+        ui.wake_worker()
         return _redirect(f"/messages/{message_id}", notice="sent")
 
     @app.post("/handoffs/{attempt_uid}/not-sent")
@@ -175,6 +176,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
         result = ui.gateway.dispatch(message_id, actor=Actor.APPLICANT)
         if result.outcome.value != "sent":
             return _redirect(f"/messages/{message_id}", error=explain(result.reason))
+        ui.wake_worker()
         return _redirect(f"/messages/{message_id}", notice="sent")
 
     @app.post("/campaigns/{campaign_id}/reply")

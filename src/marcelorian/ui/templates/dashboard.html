@@ -12,7 +12,7 @@
 </section>
 {% endif %}
 {% if open_handoffs or due_tasks %}
-<section class="card">
+<section class="card" id="handoffs">
   <h2>To do now</h2>
   <ul>
     {% for h in open_handoffs %}<li><a href="/handoffs/{{ h.attempt_uid }}">Email {{ h.step }} is open in Outlook</a>: mark it Sent or Not sent{% if h.needs_reminder %} <span class="badge warn">over a day</span>{% endif %}</li>{% endfor %}

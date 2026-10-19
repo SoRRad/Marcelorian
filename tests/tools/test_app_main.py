@@ -13,7 +13,7 @@ from marcelorian.clock import ManualClock
 from marcelorian.db.engine import transaction
 from marcelorian.db.models import ApplicantProfile, RuntimeState
 from marcelorian.platform.instance_lock import AlreadyRunning, InstanceLock
-from marcelorian.ui.app import create_app
+from marcelorian.ui.app import create_app, worker_of
 from marcelorian.ui.security import UISecurity
 from tests.conftest import TUESDAY_0900_NY
 
@@ -58,3 +58,26 @@ def test_a_second_launch_is_refused(tmp_path: Path, capsys, monkeypatch) -> None
     )
     assert main(["--data-dir", str(tmp_path), "--no-browser"]) == 2
     assert "already running" in capsys.readouterr().out
+
+
+def test_launch_starts_and_stops_the_worker(tmp_path: Path, monkeypatch) -> None:
+    class Free(InstanceLock):
+        def acquire(self) -> InstanceLock:
+            return self
+
+        def release(self) -> None:
+            return None
+
+    seen: dict[str, object] = {}
+
+    def fake_serve(app, *_a, **_k) -> int:
+        seen["running"] = worker_of(app)._thread is not None
+        seen["worker"] = worker_of(app)
+        return 0
+
+    monkeypatch.setattr("marcelorian.app_main.InstanceLock", Free)
+    monkeypatch.setattr("marcelorian.app_main.configure_logging", lambda *a, **k: None)
+    monkeypatch.setattr("marcelorian.app_main._serve", fake_serve)
+    assert main(["--data-dir", str(tmp_path), "--no-browser"]) == 0
+    assert seen["running"] is True
+    assert seen["worker"]._thread is None  # stopped when the server ends

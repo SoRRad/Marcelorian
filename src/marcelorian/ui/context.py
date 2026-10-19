@@ -16,6 +16,7 @@ from marcelorian.lookups.http import Fetcher
 from marcelorian.platform.secrets import SecretStore, open_secret_store
 from marcelorian.services.ai import AnthropicClient, ClientFactory
 from marcelorian.services.gateway import SendGateway
+from marcelorian.services.worker import BackgroundWorker
 from marcelorian.ui.security import UISession
 
 SLOGAN = "May the Force Hire You"
@@ -33,6 +34,11 @@ class UIContext:
     #: Opened only when a key is saved, removed or used (never on page loads).
     secrets: Callable[[], SecretStore] = open_secret_store
     ai_client: ClientFactory = AnthropicClient
+    worker: BackgroundWorker | None = None
+
+    def wake_worker(self) -> None:
+        if self.worker is not None:
+            self.worker.wake()
 
     def render(self, request: Request, name: str, context: dict[str, Any]) -> HTMLResponse:
         """Render with the slogan and this session's CSRF token always present."""
