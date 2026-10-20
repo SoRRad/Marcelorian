@@ -118,3 +118,19 @@ def test_send_routes_need_csrf_and_real_ids(client, security, world) -> None:
     with transaction(world.factory) as s:
         assert s.scalars(select(Campaign)).first() is None
         assert s.scalars(select(Message)).first() is None
+
+
+def test_practice_skip_ahead_to_send_time(client, security, world) -> None:
+    from datetime import timedelta
+
+    csrf = sign_in(client, security)
+    world.clock.advance(timedelta(hours=10))  # 19:00 in New York: outside the send window
+    _campaign_id, message_id = approved_message(client, csrf, world)
+    page = client.get(f"/messages/{message_id}").text
+    assert "Not yet" in page and "skip ahead to the send time" in page
+    real_now = world.clock.now()
+    response = post(client, "/settings/practice-time/until", csrf, message_id=str(message_id))
+    assert response.headers["location"] == f"/messages/{message_id}#send"
+    assert "Send (practice)" in client.get(f"/messages/{message_id}").text
+    assert world.clock.now() == real_now  # only practice time moved
+    assert post(client, "/settings/practice-time/until", csrf, message_id="999").status_code == 404

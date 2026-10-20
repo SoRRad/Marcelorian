@@ -11,9 +11,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from marcelorian.config.settings import load_settings
 from marcelorian.db.engine import transaction
+from marcelorian.db.models import Message
 from marcelorian.domain.enums import Actor, Mode
 from marcelorian.platform.secrets import SecretStoreUnavailable
-from marcelorian.services import ai, drafting, practice, runtime
+from marcelorian.services import ai, drafting, handoff, practice, runtime
 from marcelorian.services.profile import FIELD_BY_KEY
 from marcelorian.services.runtime import ModeSwitchError
 from marcelorian.ui.context import UIContext
@@ -104,6 +105,25 @@ def register(app: FastAPI, ui: UIContext) -> None:
             practice.save_offset(db, offset, now=ui.clock.now())
         ui.wake_worker()
         return _back("practice", notice="Practice time moved forward.")
+
+    @app.post("/settings/practice-time/until")
+    def skip_to_send_time(message_id: int = Form(...)) -> RedirectResponse:
+        """Practice only: move the practice clock forward to when this email unlocks."""
+        url = f"/messages/{message_id}"
+        if not ui.campaign_clock.active:
+            return RedirectResponse(url, status_code=303)
+        with transaction(ui.session_factory) as db:
+            message = db.get(Message, message_id)
+            if message is None or Mode(message.mode) is not Mode.SANDBOX:
+                raise HTTPException(status_code=404)
+            status = handoff.readiness(db, message, load_settings(db), ui.campaign_clock.now())
+        if status.unlock_at is None or status.unlock_at <= ui.campaign_clock.now():
+            return RedirectResponse(url, status_code=303)
+        offset = ui.campaign_clock.advance(status.unlock_at - ui.campaign_clock.now())
+        with transaction(ui.session_factory) as db:
+            practice.save_offset(db, offset, now=ui.clock.now())
+        ui.wake_worker()
+        return RedirectResponse(url + "#send", status_code=303)
 
     @app.post("/settings/template/{step}")
     def save_template(step: int, text: str = Form("")) -> RedirectResponse:

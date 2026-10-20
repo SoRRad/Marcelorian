@@ -108,3 +108,19 @@ def test_simulations_only_in_practice_and_close(world) -> None:
             replies.close(s, s.get(Campaign, live), " ", now=world.clock.now())
         replies.close(s, s.get(Campaign, live), "changed my mind", now=world.clock.now())
     assert campaign(world, live).state == "closed"
+
+
+def test_no_reply_before_anything_was_sent(world) -> None:
+    # Found in a browser walkthrough: an approved but unsent email could get a simulated
+    # reply, which turned the campaign into a conversation and cancelled the email.
+    from marcelorian.db.models import Message
+
+    camp = world.campaign(world.pi(world.institution()))
+    message_id = world.draft_and_approve(camp)
+    with transaction(world.factory) as s, pytest.raises(replies.ReplyError, match="sent"):
+        replies.simulate(s, s.get(Campaign, camp), "reply", now=world.clock.now())
+    with pytest.raises(replies.ReplyError, match="sent"):
+        tag(world, camp, "positive")
+    with transaction(world.factory) as s:
+        assert s.get(Message, message_id).state == "approved_queued"
+        assert not replies.reply_possible(s, s.get(Campaign, camp))

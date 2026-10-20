@@ -378,6 +378,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 "messages": messages,
                 "reviews": [(p, replies.actions_for(p)) for p in reviews],
                 "reply_tags": replies.REPLY_TAGS,
+                "reply_possible": replies.reply_possible(db, campaign),
                 "practice": Mode(campaign.mode) is Mode.SANDBOX,
                 "tasks": db.scalars(select(Task).where(Task.campaign_id == campaign.id)).all(),
                 "explain": explain,

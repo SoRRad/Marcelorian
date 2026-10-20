@@ -50,8 +50,11 @@ Try everything here first. The top of each page tells you what needs your attent
 
 1. Click **Verify**.
 2. Use the links under **Where to check** to confirm the person and their email.
-3. Choose what you found (for example **Confirmed current**). Each lead you confirm becomes ready.
-4. Open a confirmed lead and click **Turn into a contact**.
+3. In **Where you checked**, paste the web address of the page you used.
+4. Choose what you found (for example **Confirmed current**).
+5. Click the person's name at the top to open the lead.
+6. Under **Turn into a contact**: check the salutation (for example *Dr. Lee*), choose where the email is published, paste that page's address, and tick **I checked this is the institution's time zone**.
+7. Click **Turn into a contact**.
 
 ### Write and send a practice email
 
@@ -61,11 +64,12 @@ Try everything here first. The top of each page tells you what needs your attent
 4. Click **Save draft and review**.
 5. Read the email and the checklist. Click **Approve**.
 6. Click **Send (practice)**.
+   - If it says **Not yet**, the lab is outside its working hours. In practice, click **Practice: skip ahead to the send time**.
 
 ### Try the rest
 
 - **Settings → Practice time:** click **+1 day** or **+1 week** to make follow-ups due sooner.
-- On a campaign page, try **Simulate a PI reply**, then record what the reply said.
+- After a practice email is sent, open its campaign and try **Simulate a PI reply**, then record what the reply said.
 
 ---
 

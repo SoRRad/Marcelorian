@@ -583,3 +583,15 @@ owner's written description of each finding.
     is imported from the Research page (upload → preview with the same
     whole-file validation → import, or cancel); it stays local and offline, and
     still only stages research leads.
+50. **Real-browser sanity check (2026-10-20).** A Playwright walkthrough of the
+    tester guide against the real launcher found what the unit tests could not,
+    because they set headers by hand: (a) `Referrer-Policy: no-referrer` made
+    Chrome and Edge send `Origin: null` on every form post, so the strict Origin
+    check refused all forms; the policy is now `same-origin` (no referrer to
+    other sites; the Origin check is unchanged). (b) The Research page was
+    rendered without the CSRF meta tag, so the lead list upload was refused; a
+    test now checks every main page carries it. (c) A reply could be recorded or
+    simulated for an approved but unsent email, which cancelled it; replies now
+    need a sent email (or, in real modes, one open in Outlook). Also: a favicon,
+    a practice-only "skip ahead to the send time" button, and tester guide steps
+    for the verification source and the contact form.

@@ -331,6 +331,7 @@ def create_app(
             "research_list.html",
             {
                 "slogan": SLOGAN,
+                "csrf_token": current_session(request).csrf_token,  # upload form + notices
                 "rows": rows[start : start + RESEARCH_PAGE_SIZE],
                 "total": len(rows),
                 "page": page,

@@ -5,7 +5,8 @@
   <form method="post" action="/messages/{{ message.id }}/practice-send"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary">Send (practice)</button></form>
   {% else %}
   <p class="warn-text">Not yet: {{ send.reason }}</p>
-  {% if send.unlock_at %}<p>Unlocks at {{ send.unlock_at.strftime("%Y-%m-%d %H:%M") }} UTC{% if send.unlock_local %} ({{ send.unlock_local.strftime("%a %H:%M") }} at the PI's location){% endif %}.</p>{% endif %}
+  {% if send.unlock_at %}<p>Unlocks at {{ send.unlock_at.strftime("%Y-%m-%d %H:%M") }} UTC{% if send.unlock_local %} ({{ send.unlock_local.strftime("%a %H:%M") }} at the PI's location){% endif %}.</p>
+  <form method="post" action="/settings/practice-time/until" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="message_id" value="{{ message.id }}"><button type="submit">Practice: skip ahead to the send time</button></form>{% endif %}
   {% endif %}
 {% else %}
   {% if send.ready %}

@@ -10,8 +10,10 @@ Loopback binding is not the access control. This module provides:
   non-GET request.
 * a per-session CSRF token on every state-changing request (``X-CSRF-Token``
   header, or a ``csrf_token`` field in an urlencoded form).
-* security headers (CSP without inline script, no framing, no referrer,
-  no caching).
+* security headers (CSP without inline script, no framing, no referrer sent to other
+  sites, no caching). The referrer policy is ``same-origin``, not ``no-referrer``: under
+  ``no-referrer`` Chrome and Edge send ``Origin: null`` on ordinary form submissions,
+  which the exact Origin check (rightly) rejects, so every form would fail.
 
 Sessions are held in memory and end when the app process exits.
 """
@@ -47,7 +49,7 @@ SECURITY_HEADERS: tuple[tuple[bytes, bytes], ...] = (
     ),
     (b"x-frame-options", b"DENY"),
     (b"x-content-type-options", b"nosniff"),
-    (b"referrer-policy", b"no-referrer"),
+    (b"referrer-policy", b"same-origin"),  # see module docstring
     (b"cache-control", b"no-store"),
     (b"cross-origin-opener-policy", b"same-origin"),
     (b"cross-origin-resource-policy", b"same-origin"),
