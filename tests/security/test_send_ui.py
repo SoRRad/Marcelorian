@@ -17,7 +17,7 @@ from marcelorian.ui.security import UISecurity
 from tests.fakes.lookups import FakeFetcher
 from tests.security.test_drafting_ui import post, start
 from tests.security.test_ui_security import ORIGIN, PORT, sign_in
-from tests.service.test_drafting import PERSONAL, confirm_facts
+from tests.service.test_drafting import PERSONAL, add_evidence, confirm_facts
 
 
 @pytest.fixture
@@ -34,6 +34,7 @@ def client(world, security):
 def approved_message(client, csrf, world) -> tuple[int, int]:
     confirm_facts(world)
     _pi, campaign_id = start(client, csrf, world)
+    add_evidence(world, campaign_id)  # the PI's work, so the personal line is tailored
     response = post(client, f"/campaigns/{campaign_id}/draft", csrf, action="save", **PERSONAL)
     message_url = response.headers["location"]
     assert post(client, f"{message_url}/approve", csrf).status_code == 303

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from marcelorian.db.engine import transaction
-from marcelorian.db.models import Campaign, Message
+from marcelorian.db.models import Campaign, Evidence, Message
 from marcelorian.domain.enums import Actor, MessageState, Mode
 from marcelorian.services import approvals, drafting, profile
 from tests.factories import SPECIALTY
@@ -36,6 +36,24 @@ def confirm_facts(world, facts=FACTS, *, confirm: bool = True) -> None:
                 actor=Actor.APPLICANT,
                 now=world.clock.now(),
             )
+
+
+def add_evidence(world, campaign_id: int, title: str = "Synthetic OCT biomarkers") -> int:
+    with transaction(world.factory) as s:
+        pi_id = s.get(Campaign, campaign_id).pi_id
+        item = Evidence(
+            pi_id=pi_id,
+            source="pubmed",
+            external_id=f"pmid-{title[:8]}",
+            title=title,
+            venue="Synthetic Journal",
+            published_on="2026-01-01",
+            url="https://example.org/paper",
+            retrieved_at=world.clock.now(),
+        )
+        s.add(item)
+        s.flush()
+        return item.id
 
 
 def campaign_for(world, mode: Mode = Mode.SANDBOX) -> int:
@@ -120,6 +138,7 @@ def test_unconfirmed_facts_block_the_checklist_and_approval(world) -> None:
 def test_save_review_and_approve_in_practice_mode(world) -> None:
     confirm_facts(world)
     camp = campaign_for(world)
+    add_evidence(world, camp)  # the PI's work, so the personal line is tailored
     message_id = save(world, camp)
     message = world.message(message_id)
     assert message.state == MessageState.AWAITING_APPROVAL.value

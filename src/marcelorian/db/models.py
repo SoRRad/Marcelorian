@@ -901,3 +901,20 @@ class Task(Base):
     details: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime]
     done_at: Mapped[datetime | None]
+
+
+class PositionLink(Base):
+    """A posted position the applicant confirmed is current for this contact (tailoring).
+
+    Postings come from the research catalog (``record_type = 'opportunity'``) and are only
+    leads; the applicant confirms one before Email 1 names it.
+    """
+
+    __tablename__ = "position_link"
+    __table_args__ = (UniqueConstraint("pi_id", "research_record_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pi_id: Mapped[int] = mapped_column(ForeignKey("pi.id"), index=True)
+    research_record_id: Mapped[int] = mapped_column(ForeignKey("research_record.id"))
+    title: Mapped[str] = mapped_column(Text)
+    confirmed_at: Mapped[datetime]
+    withdrawn_at: Mapped[datetime | None]

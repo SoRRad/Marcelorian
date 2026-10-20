@@ -77,6 +77,10 @@ the disagreement is a bug to report.
 | U2 | AI help | Owner answer (2026-10-19): AI is optional. Everything works without it (templates plus applicant-written personal lines); with an Anthropic key, Claude may suggest the personal lines and CV facts with evidence for review. Practice (sandbox) uses canned drafts at no cost. | §4, §8, §16 | P2 | (P2 drafting) |
 | U3 | Channels | Owner answer (2026-10-19): Outlook hand-off only for the pilot; the applicant sends from Outlook and marks Sent / Replied / Rejected in the app. The real Gmail adapter, history sync and Gmail setup are deferred (P0.3 Gmail gate unchanged). | §9.8, §10, §16, §18 (P3) | Pilot scope | — |
 | U4 | Owner monitoring | Owner answer (2026-10-19): an always-current, Excel-friendly export (CSV plus a status summary) the tester can send to the owner, instead of a shared Google Sheet. | §13, §16 | P4 | (P4 exports) |
+| T1 | Tailoring strictness | Owner answer (2026-10-20): every email must be specific to the PI. The "Tailored to this PI" and "not reused" checks block approval of real emails and only warn in practice mode. | §8.3 | Tailoring | `services/tailoring.py`; `tests/service/test_tailoring.py` |
+| T2 | Posted positions | Owner answer (2026-10-20): when a lead is linked to a posted position, Email 1 names it only after the applicant confirms on the contact page that the posting is current; then the checklist requires the name. | §7, §8.1 | Tailoring | `position_link` (migration 0010) |
+| T3 | What counts as the PI's interests | Owner answer (2026-10-20): publication titles from the free lookups, the catalog's verified research topics, and a confirmed posted position. Unverified subspecialty claims do not count. | §6, §8 | Tailoring | `tailoring.interests` |
+| T4 | Fixed tester zip | Owner answer (2026-10-20): publish v0.1.1-pilot with the real-browser fixes now; tailoring follows in a later version. | §18 (P5) | Packaging | release v0.1.1-pilot |
 
 ## P0 implementation notes (behavior chosen inside the decisions, documented here)
 
@@ -595,3 +599,21 @@ owner's written description of each finding.
     need a sent email (or, in real modes, one open in Outlook). Also: a favicon,
     a practice-only "skip ahead to the send time" button, and tester guide steps
     for the verification source and the contact form.
+51. **Tailored emails (T1–T3).** Email 1 and Email 2 carry a line about the PI
+    (`personalized_sentence`, `pi_topic`). The checklist adds "Tailored to this
+    PI": that line must contain a topic word from the PI's interests (publication
+    titles from the lookups, verified catalog topics, a confirmed posting), with
+    light stemming and a stop list of generic words, or Email 1 must name the
+    confirmed posting. The matched word and its source are shown. "Not reused"
+    compares the line with the same line in emails to other PIs in the same mode
+    (exact or at least 90% similar). Both block real emails and warn in practice.
+    Linked postings appear on the contact page with their application route and
+    a confirm button; once confirmed, the new `{opening_line}` placeholder in the
+    default Email 1 template names the posting ("I am writing regarding the
+    posted opportunity “…”"), otherwise it keeps the original "expected opening"
+    sentence word for word. A custom template without the posting's name fails
+    "Names the posted position you confirmed". The draft page lists the PI's
+    interests; practice text names one of them. Emails 3 and 4 have no line about
+    the PI and are not checked (Email 1 already was). Withdrawing a posting after
+    approval does not change an approved email (its snapshot is fixed); re-draft
+    if needed.

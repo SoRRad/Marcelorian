@@ -28,7 +28,7 @@
 {% if reviewable %}
 <section class="card">
   <h2>Checklist</h2>
-  <ul>{% for c in checks %}<li class="{{ '' if c.ok else 'warn-text' }}">{{ "✓" if c.ok else "✗" }} {{ c.label }}{% if c.detail and not c.ok %} — {{ c.detail }}{% endif %}</li>{% endfor %}</ul>
+  <ul>{% for c in checks %}<li class="{{ '' if c.ok else 'warn-text' }}">{{ "✓" if c.ok else ("⚠" if c.warn_only else "✗") }} {{ c.label }}{% if c.detail and (not c.ok or c.key == "tailored") %} — {{ c.detail }}{% endif %}{% if c.warn_only and not c.ok %} <span class="note">(practice: a warning; a real email must pass this)</span>{% endif %}</li>{% endfor %}</ul>
   <p class="note">These checks confirm structure and sources, not truth. Your review is the final factual check: read the email as the PI will.</p>
   <div class="quick-buttons">
     <form method="post" action="/messages/{{ message.id }}/approve"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary" {% if not can_approve %}disabled{% endif %}>Approve</button></form>

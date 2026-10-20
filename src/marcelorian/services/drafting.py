@@ -25,18 +25,16 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from marcelorian.db.models import Campaign, CvVersion, Message, Pi, Setting
+from marcelorian.db.models import Campaign, CvVersion, Message, Pi, PositionLink, Setting
 from marcelorian.domain.enums import Actor, FactStatus, MessageState, Mode
 from marcelorian.domain.subjects import expected_subject
-from marcelorian.services import approvals, dnc, profile
+from marcelorian.services import approvals, dnc, profile, tailoring
 from marcelorian.services.recipients import send_ready_email
 
 DEFAULT_TEMPLATES: dict[int, str] = {
     1: (
         "Dear {salutation},\n\n"
-        "My name is {full_name}, and I am {current_role_phrase}. I am writing to ask whether "
-        "your group expects an opening for a research fellow or similar position starting "
-        "{availability}.\n\n"
+        "My name is {full_name}, and I am {current_role_phrase}. {opening_line}\n\n"
         "{personalized_sentence}\n\n"
         "My background includes {skills_line}. I would be glad to contribute to "
         "{contribution_line}.\n\n"
@@ -75,6 +73,7 @@ PERSONAL_FIELDS: dict[str, str] = {
     "pi_topic": 'Completes "Your work on … remains of strong interest to me"',
 }
 RULE_FIELDS = (
+    "opening_line",
     "salutation",
     "full_name",
     "current_role_phrase",
@@ -96,6 +95,19 @@ CANNED: dict[str, str] = {
     "contribution_line": PRACTICE_PREFIX + "your ongoing projects",
     "pi_topic": PRACTICE_PREFIX + "retinal imaging",
 }
+
+
+def practice_text(topic: str | None) -> dict[str, str]:
+    """Practice lines; they name one of the PI's own topics when one is on file."""
+    if not topic:
+        return dict(CANNED)
+    return {
+        **CANNED,
+        "personalized_sentence": PRACTICE_PREFIX + f"I read about your work on {topic}.",
+        "pi_topic": PRACTICE_PREFIX + topic,
+    }
+
+
 _MONTHS = (
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
@@ -226,11 +238,16 @@ def render(
         values["current_role_phrase"] = fact_value(
             "current_role_phrase", "Current role", required=True
         )
-    if "availability" in names:
+    if "availability" in names or "opening_line" in names:
         start = fact_value("earliest_start", "Earliest start", required=True)
         duration = fact_value("desired_duration", "Desired duration", required=False)
         values["availability"] = (
             month_year(start) + (f" for {duration}" if duration else "") if start else ""
+        )
+    if "opening_line" in names:
+        values["opening_line"] = opening_line(
+            tailoring.confirmed_position(session, pi.id) if step == 1 else None,
+            values["availability"],
         )
     if "funding_line" in names:
         values["funding_line"] = fact_value("funding_line", "Funding line", required=False)
@@ -262,6 +279,19 @@ def render(
         fact_ids=sorted(set(used)),
         cv_ids=cv_ids,
         missing=list(dict.fromkeys(missing)),
+    )
+
+
+def opening_line(position: PositionLink | None, availability: str) -> str:
+    """Email 1's request: the confirmed posted position by name, else an expected opening."""
+    if position is not None:
+        return (
+            f"I am writing regarding the posted opportunity “{position.title}”, and I would "
+            f"be glad to be considered for a start in {availability}."
+        )
+    return (
+        "I am writing to ask whether your group expects an opening for a research fellow or "
+        f"similar position starting {availability}."
     )
 
 
@@ -391,6 +421,8 @@ class Check:
     label: str
     ok: bool
     detail: str = ""
+    #: A failed warn-only check is shown but does not block approval (practice mode).
+    warn_only: bool = False
 
 
 def checklist(
@@ -470,6 +502,37 @@ def checklist(
             "No explicitly unpaid opportunity is linked to this contact.",
         ),
     ]
+    fit = tailoring.assess(session, message, personal)
+    warn = not tailoring.blocking(mode)
+    if fit.applies:
+        checks.append(
+            Check(
+                "tailored",
+                "Tailored to this PI (their research or a posted position)",
+                fit.tailored,
+                fit.tailored_detail,
+                warn_only=warn,
+            )
+        )
+        checks.append(
+            Check(
+                "not_reused",
+                "The line about the PI is not reused from another PI's email",
+                not fit.reused,
+                fit.reused_detail,
+                warn_only=warn,
+            )
+        )
+    if fit.position_title is not None:
+        checks.append(
+            Check(
+                "position_named",
+                "Names the posted position you confirmed",
+                fit.position_named,
+                f"add “{fit.position_title}” (the default template does this for you)",
+                warn_only=warn,
+            )
+        )
     return checks
 
 
@@ -483,7 +546,7 @@ def _fact_current(session: Session, fact_id: int, version: int) -> bool:
 
 
 def ready_to_approve(checks: list[Check]) -> bool:
-    return all(c.ok for c in checks)
+    return all(c.ok or c.warn_only for c in checks)
 
 
 def ensure_campaign(
