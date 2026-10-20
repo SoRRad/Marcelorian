@@ -8,7 +8,9 @@
    **Artifacts** (visible to repository collaborators only).
 4. To give a tester a download link, run it again with **publish** on. This creates a
    GitHub **pre-release** with the zip and its `.sha256`. In a public repository, that
-   link is public; the zip holds only the app, no data.
+   link is public; the zip holds only the app, no data. Publishing also marks every
+   older pilot build as **superseded** (a notice at the top of its page linking to the
+   new one), so testers never pick an old version by mistake.
 
 The workflow uses Python 3.12.10 from `actions/setup-python`, installs every dependency
 from `requirements/runtime-windows.txt` with hash checking, runs the app's self-test from

@@ -60,8 +60,8 @@ Try everything here first. The top of each page tells you what needs your attent
 
 Every email must be about **this** PI: their research, or a job they posted.
 
-1. Click **Candidates** and open a contact.
-2. Under **Public evidence**, click **Look up PubMed, OpenAlex and NIH grants**. This loads their publications.
+1. Click **Candidates**. Under **Publications for everyone**, click **Look up all**. It runs by itself; you can keep working.
+2. Open a contact.
 3. If **Interests and posted positions** lists a job, open its page. If it is still open, click **I checked: this posting is current**.
 4. Click **Draft an email**.
 5. Read **This PI's interests** at the top. Write the personal lines, and mention one of those topics in the line about the PI. In practice you can click **Fill empty lines with practice text**.

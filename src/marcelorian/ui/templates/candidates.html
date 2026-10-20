@@ -1,5 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
+<section class="card" id="lookup-all">
+  <h2>Publications for everyone</h2>
+  {% if notice %}<p class="near">{{ notice }}</p>{% endif %}
+  {% if lookup and lookup.running %}
+  <p>Looking up publications: <strong>{{ lookup.done }} of {{ lookup.total }}</strong> contacts{% if lookup.current %} · now: {{ lookup.current }}{% endif %}. You can keep working; refresh to see progress.</p>
+  <form method="post" action="/candidates/lookup-all/stop" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Stop</button></form>
+  {% else %}
+  {% if lookup and lookup.finished_at %}<p class="note">Last run: {{ lookup.done }} of {{ lookup.total }} looked up{% if lookup.failed %}, {{ lookup.failed }} could not be reached (tried again next time){% endif %}{% if lookup.stopped %}, stopped early{% endif %}.</p>{% endif %}
+  {% if lookup_needed %}
+  <p>{{ lookup_needed }} contact{{ "" if lookup_needed == 1 else "s" }} without recent publications. Their interests are needed to tailor each email.</p>
+  <form method="post" action="/candidates/lookup-all" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary">Look up all ({{ lookup_needed }})</button></form>
+  <p class="note">Free and read-only (PubMed, OpenAlex, NIH grants), one contact at a time; about a second per contact. Contacts done in the last 30 days are skipped, so you can stop and continue later.</p>
+  {% else %}<p class="note">Every contact has recent publications on file.</p>{% endif %}
+  {% endif %}
+</section>
+
 <section class="card">
   <h2>Candidates</h2>
   <p class="note">Contacts you turned into candidates from the research catalog. Each dimension is shown on its own — there is no single score. Sorted by grant evidence, your fit rating, then address quality.</p>

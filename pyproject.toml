@@ -32,6 +32,7 @@ dev = [
     "ruff==0.16.10",
     "mypy==2.4.0",
     "types-PyYAML==6.0.12.20260906",
+    "playwright==1.56.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -55,6 +56,7 @@ timeout = 60
 markers = [
     "windows_only: exercises a real Windows adapter; skipped on other platforms",
     "narrow_window: world starts with the narrowed Tue-Thu 08:00-11:00 send window",
+    "e2e: real-browser walkthrough; runs only with MARCELORIAN_E2E=1 and Chromium installed",
 ]
 filterwarnings = [
     "error::DeprecationWarning:marcelorian.*",

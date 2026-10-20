@@ -45,6 +45,7 @@ from marcelorian.domain.research import (
     confidence,
     is_web_url,
 )
+from marcelorian.lookups.bulk import PAUSE_SECONDS, BulkLookup
 from marcelorian.lookups.http import Fetcher, HttpFetcher
 from marcelorian.platform.paths import AppPaths
 from marcelorian.platform.secrets import SecretStore, open_secret_store
@@ -63,7 +64,7 @@ from marcelorian.services import (
 from marcelorian.services.ai import AnthropicClient, ClientFactory
 from marcelorian.services.gateway import SendGateway
 from marcelorian.services.sync import SandboxSync
-from marcelorian.services.worker import BackgroundWorker, notices
+from marcelorian.services.worker import BackgroundWorker, Notice, notices
 from marcelorian.transport.sandbox import SandboxTransport
 from marcelorian.ui import (
     routes_contacts,
@@ -122,6 +123,7 @@ def create_app(
     ai_client: ClientFactory | None = None,
     paths: AppPaths | None = None,
     request_shutdown: Callable[[], None] | None = None,
+    lookup_pause: float = PAUSE_SECONDS,
 ) -> Any:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     templates = _templates()
@@ -155,12 +157,14 @@ def create_app(
         jobs.append(lambda: backup.daily(data_paths.db_path, data_paths.backups_dir, clock.now()))
     worker = BackgroundWorker(session_factory, clock, practice_clock, transports, syncs, jobs=jobs)
     app.state.worker = worker
+    the_fetcher = fetcher or HttpFetcher()
+    bulk = BulkLookup(session_factory, the_fetcher, clock, pause=lookup_pause)
     ui = UIContext(
         templates,
         session_factory,
         clock,
         current_session,
-        fetcher or HttpFetcher(),
+        the_fetcher,
         practice_clock,
         gateway,
         secrets or open_secret_store,
@@ -168,6 +172,7 @@ def create_app(
         worker,
         paths,
         request_shutdown,
+        bulk,
     )
     routes_profile.register(app, ui)
     routes_contacts.register(app, ui)
@@ -181,6 +186,17 @@ def create_app(
     def api_notices() -> JSONResponse:
         with transaction(session_factory) as db:
             found = notices(db, now=clock.now(), campaign_now=practice_clock.now())
+        running = bulk.progress()
+        if running.running:
+            found.append(
+                Notice(
+                    "lookups_running",
+                    "info",
+                    f"Looking up publications: {running.done} of {running.total} contacts.",
+                    "/candidates#lookup-all",
+                    running.total - running.done,
+                )
+            )
         return JSONResponse(
             {
                 "notices": [

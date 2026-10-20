@@ -52,3 +52,28 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: python packaging/build_zip.py --version v0.0.0-ci
+
+  browser:
+    # Real-browser walkthrough of the tester guide (tests/e2e). Unit tests set headers by
+    # hand; this catches what only a browser does (it found the "Origin: null" form bug).
+    name: browser walkthrough (chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install pinned dependencies (hash-checked)
+        run: |
+          python -m pip install --upgrade "pip==25.2"
+          python -m pip install --require-hashes -r requirements/lock.txt
+          python -m pip install --no-deps -e .
+      - name: Install Chromium for Playwright
+        run: python -m playwright install --with-deps chromium
+      - name: Walkthrough
+        env:
+          MARCELORIAN_E2E: "1"
+        run: python -m pytest tests/e2e -q

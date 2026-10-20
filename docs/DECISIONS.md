@@ -617,3 +617,15 @@ owner's written description of each finding.
     the PI and are not checked (Email 1 already was). Withdrawing a posting after
     approval does not change an approved email (its snapshot is fixed); re-draft
     if needed.
+52. **Owner ideas (2026-10-20).** (a) **Look up all**: the Candidates page starts
+    one background run over every contact without a *successful* lookup in the last
+    30 days (a failed or skipped source does not count, so those retry), one contact
+    at a time with a one-second pause, network outside transactions; progress and a
+    Stop button on the page and in the notice bar; resumable because finished
+    contacts are skipped. (b) **Browser walkthrough in CI**: `tests/e2e` drives
+    Chromium (Playwright, a dev dependency) through the tester guide against the real
+    app on a free port with fake lookup data; a separate CI job installs Chromium and
+    runs it with `MARCELORIAN_E2E=1`. It fails with the old `no-referrer` policy, so
+    it would have caught that bug. (c) **Superseded releases**: the Package
+    workflow's release job marks every older pre-release with a notice linking to the
+    new one (idempotent; `packaging/supersede_releases.sh`).

@@ -16,7 +16,7 @@ from marcelorian.db.engine import transaction
 from marcelorian.db.models import Campaign, Institution, Pi, PiEmail, ResearchRecord
 from marcelorian.domain.enums import Mode
 from marcelorian.domain.research import is_web_url
-from marcelorian.lookups import enrich
+from marcelorian.lookups import bulk, enrich
 from marcelorian.services import candidates, dnc, promotion, reservations, runtime, tailoring
 from marcelorian.services.recipients import send_ready_email
 from marcelorian.ui.context import UIContext
@@ -85,15 +85,19 @@ def register(app: FastAPI, ui: UIContext) -> None:
             scope = load_settings(db).same_place_scope
             rows = candidates.list_candidates(db, filters, view.active_mode, scope, now)
             institutions = candidates.institutions(db)
+            lookup_needed = len(bulk.needing_lookup(db, now))
         return ui.render(
             request,
             "candidates.html",
             {
+                "lookup": ui.bulk.progress() if ui.bulk else None,
+                "lookup_needed": lookup_needed,
                 "rows": rows,
                 "filters": filters,
                 "fits": candidates.FITS,
                 "institutions": institutions,
                 "mode": view.active_mode.value,
+                "notice": request.query_params.get("notice", ""),
             },
         )
 
@@ -140,6 +144,23 @@ def register(app: FastAPI, ui: UIContext) -> None:
         with transaction(ui.session_factory) as db:
             enrich.store_pi_results(db, pi_id, results, ui.clock.now())
         return RedirectResponse(f"/candidates/{pi_id}#evidence", status_code=303)
+
+    @app.post("/candidates/lookup-all")
+    def lookup_all() -> RedirectResponse:
+        """Start the background lookup for every contact that needs one."""
+        if ui.bulk is None:  # pragma: no cover - always configured by create_app
+            raise HTTPException(status_code=503)
+        count = ui.bulk.start()
+        notice = f"Looking up {count} contacts in the background." if count else "Nothing to do."
+        return RedirectResponse(
+            f"/candidates?{urlencode({'notice': notice})}#lookup-all", status_code=303
+        )
+
+    @app.post("/candidates/lookup-all/stop")
+    def lookup_all_stop() -> RedirectResponse:
+        if ui.bulk is not None:
+            ui.bulk.stop()
+        return RedirectResponse("/candidates#lookup-all", status_code=303)
 
     @app.post("/candidates/{pi_id}/postings/{record_id}")
     def candidate_posting(pi_id: int, record_id: int, action: str = Form("")) -> RedirectResponse:
