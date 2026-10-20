@@ -22,7 +22,16 @@ from marcelorian.db.models import Campaign, Institution, Message, Pi, SendAttemp
 from marcelorian.domain.enums import Actor, MessageState, Mode
 from marcelorian.lookups.enrich import evidence_for
 from marcelorian.platform.secrets import SecretStoreUnavailable
-from marcelorian.services import ai, approvals, drafting, profile, replies, runtime, worker
+from marcelorian.services import (
+    ai,
+    approvals,
+    drafting,
+    profile,
+    replies,
+    runtime,
+    tailoring,
+    worker,
+)
 from marcelorian.services.reservations import CapacityError
 from marcelorian.ui.context import UIContext
 from marcelorian.ui.reasons import explain
@@ -123,6 +132,9 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 "practice": Mode(campaign.mode) is Mode.SANDBOX,
                 "ai_on": ai.key_saved(db),
                 "cited": _cited(db, campaign, fields),
+                "interests": tailoring.interests(db, campaign.pi_id).sources[:12],
+                "position": tailoring.confirmed_position(db, campaign.pi_id) if step == 1 else None,
+                "pi_line": tailoring.PI_LINE.get(step or 0),
                 "error": request.query_params.get("error", ""),
                 "notice": request.query_params.get("notice", ""),
             }
@@ -147,7 +159,8 @@ def register(app: FastAPI, ui: UIContext) -> None:
             if action == "practice":
                 if Mode(campaign.mode) is not Mode.SANDBOX:
                     raise HTTPException(status_code=400, detail="practice text is sandbox-only")
-                for key, text in drafting.CANNED.items():
+                canned = drafting.practice_text(tailoring.practice_topic(db, campaign.pi_id))
+                for key, text in canned.items():
                     if not personal.get(key):
                         personal[key], sources[key] = text, "practice"
             body = str(form.get("body", "")) if form.get("edit_body") == "yes" else None
@@ -303,7 +316,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
             checks = drafting.checklist(
                 db, message, specialty_display_name=_specialty(), today=now.date()
             )
-            failed = [c.label for c in checks if not c.ok]
+            failed = [c.label for c in checks if not c.ok and not c.warn_only]
             if failed:
                 query = urlencode({"error": "Fix the checklist first: " + "; ".join(failed)})
                 return RedirectResponse(f"{url}?{query}", status_code=303)

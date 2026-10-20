@@ -17,7 +17,7 @@ from marcelorian.db.models import Campaign, Institution, Pi, PiEmail, ResearchRe
 from marcelorian.domain.enums import Mode
 from marcelorian.domain.research import is_web_url
 from marcelorian.lookups import enrich
-from marcelorian.services import candidates, dnc, promotion, reservations, runtime
+from marcelorian.services import candidates, dnc, promotion, reservations, runtime, tailoring
 from marcelorian.services.recipients import send_ready_email
 from marcelorian.ui.context import UIContext
 
@@ -120,6 +120,8 @@ def register(app: FastAPI, ui: UIContext) -> None:
                     db, pi.id, view.active_mode, scope, now
                 ),
                 "records": candidates.research_records_for(db, pi.id),
+                "postings": tailoring.linked_postings(db, pi.id),
+                "verified_topics": tailoring.verified_topics(db, pi.id),
                 "campaigns": db.scalars(select(Campaign).where(Campaign.pi_id == pi.id)).all(),
                 "dnc": dnc.matches(db, pi.id, Mode.LIVE),
                 "is_web_url": is_web_url,
@@ -138,6 +140,24 @@ def register(app: FastAPI, ui: UIContext) -> None:
         with transaction(ui.session_factory) as db:
             enrich.store_pi_results(db, pi_id, results, ui.clock.now())
         return RedirectResponse(f"/candidates/{pi_id}#evidence", status_code=303)
+
+    @app.post("/candidates/{pi_id}/postings/{record_id}")
+    def candidate_posting(pi_id: int, record_id: int, action: str = Form("")) -> RedirectResponse:
+        """Confirm (or withdraw) that a linked posted position is current (T2)."""
+        url = f"/candidates/{pi_id}"
+        with transaction(ui.session_factory) as db:
+            if db.get(Pi, pi_id) is None:
+                raise HTTPException(status_code=404)
+            try:
+                if action == "confirm":
+                    tailoring.confirm_posting(db, pi_id, record_id, now=ui.clock.now())
+                elif action == "withdraw":
+                    tailoring.withdraw_posting(db, pi_id, record_id, now=ui.clock.now())
+                else:
+                    raise HTTPException(status_code=400)
+            except tailoring.TailoringError as exc:
+                return RedirectResponse(f"{url}?{urlencode({'error': str(exc)})}#postings", 303)
+        return RedirectResponse(f"{url}#postings", status_code=303)
 
     @app.post("/candidates/{pi_id}/assessment")
     def candidate_assessment(

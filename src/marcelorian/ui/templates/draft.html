@@ -7,6 +7,13 @@
   {% if notice %}<p class="near">{{ notice }}</p>{% endif %}
   {% if not step %}<p>There is no email to draft for this campaign right now. Follow-ups become draftable when they are due.</p>{% else %}
   <p class="note">The template fills in your confirmed profile answers. Write the personal lines yourself{% if ai_on %}, ask Claude to suggest the empty ones{% endif %}{% if practice %}, or use practice text{% endif %}. Nothing is sent from this page.</p>
+  <div class="interests" id="interests">
+    <h3>This PI's interests</h3>
+    {% if position %}<p>Posted position you confirmed: <strong>{{ position.title }}</strong> (Email 1 names it).</p>{% endif %}
+    {% if interests %}<ul>{% for kind, text in interests %}<li><span class="note">{{ kind }}:</span> {{ text }}</li>{% endfor %}</ul>
+    {% if pi_line %}<p class="note">Mention one of these topics in the line about the PI. Each email must be specific to this PI, and the line can't repeat one you wrote for someone else.</p>{% endif %}
+    {% else %}<p class="warn-text">Nothing on file yet. Open <a href="/candidates/{{ pi.id }}#evidence">the contact page</a> and use the free lookup, or confirm a posted position there.</p>{% endif %}
+  </div>
   <form method="post" action="/campaigns/{{ campaign.id }}/draft" class="review">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% for key, label in personal_fields.items() %}

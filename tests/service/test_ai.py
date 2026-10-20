@@ -13,31 +13,13 @@ from typing import Any
 import pytest
 
 from marcelorian.db.engine import transaction
-from marcelorian.db.models import AuditEvent, Campaign, Evidence, Message
+from marcelorian.db.models import AuditEvent, Campaign, Message
 from marcelorian.services import ai, drafting, profile
 from tests.fakes.ai import FakeAIClient
 from tests.fakes.secrets import InMemorySecretStore
-from tests.service.test_drafting import FACTS, campaign_for, confirm_facts
+from tests.service.test_drafting import FACTS, add_evidence, campaign_for, confirm_facts
 
 FIELDS = ["personalized_sentence", "skills_line", "contribution_line"]
-
-
-def add_evidence(world, campaign_id: int, title: str = "Synthetic OCT biomarkers") -> int:
-    with transaction(world.factory) as s:
-        pi_id = s.get(Campaign, campaign_id).pi_id
-        item = Evidence(
-            pi_id=pi_id,
-            source="pubmed",
-            external_id=f"pmid-{title[:8]}",
-            title=title,
-            venue="Synthetic Journal",
-            published_on="2026-01-01",
-            url="https://example.org/paper",
-            retrieved_at=world.clock.now(),
-        )
-        s.add(item)
-        s.flush()
-        return item.id
 
 
 def fact_id(world, key: str) -> int:

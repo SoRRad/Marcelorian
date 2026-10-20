@@ -34,7 +34,7 @@
 
 <section class="card">
   <h2>Email templates</h2>
-  <p class="note">The subject is fixed. Placeholders in braces are filled for you: {salutation}, {full_name}, {current_role_phrase}, {availability}, {personalized_sentence}, {skills_line}, {contribution_line}, {funding_line}, {pi_topic}, {optional_update}, {cv_phrase}, {signature}, {signature_name}. Leave a box empty to restore the default.</p>
+  <p class="note">The subject is fixed. Placeholders in braces are filled for you: {opening_line} (asks about an opening, or names a posted position you confirmed), {salutation}, {full_name}, {current_role_phrase}, {availability}, {personalized_sentence}, {skills_line}, {contribution_line}, {funding_line}, {pi_topic}, {optional_update}, {cv_phrase}, {signature}, {signature_name}. Leave a box empty to restore the default.</p>
   {% for step, text in templates.items() %}
   <form method="post" action="/settings/template/{{ step }}" class="review" id="t{{ step }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

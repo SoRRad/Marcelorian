@@ -42,6 +42,21 @@
   <ul>{% for e in evidence %}<li>{% if is_web_url(e.url) %}<a href="{{ e.url }}" target="_blank" rel="noopener noreferrer">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %} <span class="note">{{ e.venue }} {{ e.published_on }} · {{ e.source }}</span>{% if e.excerpt %}<br><span class="note">{{ e.excerpt }}</span>{% endif %}</li>{% else %}<li>No evidence yet. Use the lookup above.</li>{% endfor %}</ul>
 </section>
 
+<section class="card" id="postings">
+  <h2>Interests and posted positions</h2>
+  <p class="note">Every email must be specific to this PI: their research (publications from the lookup below, or verified topics) or a posted position you confirmed.</p>
+  {% if verified_topics %}<p>Verified research topics: {{ verified_topics|join("; ") }}</p>{% endif %}
+  {% if postings %}
+  <ul>{% for p in postings %}<li><strong>{{ p.title }}</strong> <span class="note">{{ p.program_type.replace("_", " ") }}{% if p.status %} · {{ p.status.replace("_", " ") }}{% endif %}{% if p.deadline %} · deadline {{ p.deadline }}{% endif %}</span>
+    {% if is_web_url(p.application_url) %}<br><a href="{{ p.application_url }}" target="_blank" rel="noopener noreferrer">Posting / application page</a>{% endif %}
+    {% if p.scope_note %}<br><span class="note">{{ p.scope_note }}</span>{% endif %}
+    <form method="post" action="/candidates/{{ pi.id }}/postings/{{ p.record_id }}" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if p.confirmed %}<span class="badge">confirmed current</span> <button type="submit" name="action" value="withdraw">No longer current</button>
+    {% else %}<button type="submit" name="action" value="confirm">I checked: this posting is current</button>{% endif %}</form></li>{% endfor %}</ul>
+  <p class="note">Once confirmed, Email 1 names the position. If the posting asks you to apply through its own page, apply there too.</p>
+  {% elif not verified_topics %}<p class="note">No posted position or verified topic for this contact. Use <strong>Look up PubMed, OpenAlex and NIH grants</strong> below to load their publications.</p>{% endif %}
+</section>
+
 {% if records %}
 <section class="card"><h2>From the research catalog</h2><ul>{% for r in records %}<li><a href="/research/{{ r.id }}">{{ r.name }}</a> ({{ r.external_record_id }})</li>{% endfor %}</ul></section>
 {% endif %}

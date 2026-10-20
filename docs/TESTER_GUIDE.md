@@ -58,12 +58,17 @@ Try everything here first. The top of each page tells you what needs your attent
 
 ### Write and send a practice email
 
+Every email must be about **this** PI: their research, or a job they posted.
+
 1. Click **Candidates** and open a contact.
-2. Click **Draft an email**.
-3. Write the personal lines. In practice you can click **Fill empty lines with practice text**.
-4. Click **Save draft and review**.
-5. Read the email and the checklist. Click **Approve**.
-6. Click **Send (practice)**.
+2. Under **Public evidence**, click **Look up PubMed, OpenAlex and NIH grants**. This loads their publications.
+3. If **Interests and posted positions** lists a job, open its page. If it is still open, click **I checked: this posting is current**.
+4. Click **Draft an email**.
+5. Read **This PI's interests** at the top. Write the personal lines, and mention one of those topics in the line about the PI. In practice you can click **Fill empty lines with practice text**.
+6. Click **Save draft and review**.
+7. Read the email and the checklist. Click **Approve**.
+   - A real email can't be approved until **Tailored to this PI** has a ✓. In practice it only shows ⚠.
+8. Click **Send (practice)**.
    - If it says **Not yet**, the lab is outside its working hours. In practice, click **Practice: skip ahead to the send time**.
 
 ### Try the rest
