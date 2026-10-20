@@ -16,12 +16,13 @@ from datetime import date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from marcelorian.db.models import Campaign, CampaignPause, PiEmail, Task
+from marcelorian.db.models import Campaign, CampaignPause, Message, PiEmail, Task
 from marcelorian.domain.enums import (
     Actor,
     CampaignState,
     CloseOutcome,
     InboundClassification,
+    MessageState,
     Mode,
     PauseReason,
 )
@@ -52,6 +53,18 @@ class ReplyError(ValueError):
     pass
 
 
+def reply_possible(session: Session, campaign: Campaign) -> bool:
+    """A PI can reply only to an email that was sent, or (real modes) one open in Outlook.
+
+    An approved email that was never sent cannot have a reply; recording one would turn
+    the campaign into a conversation and cancel that unsent email.
+    """
+    states = set(session.scalars(select(Message.state).where(Message.campaign_id == campaign.id)))
+    if MessageState.SENT.value in states:
+        return True
+    return Mode(campaign.mode).is_real and MessageState.HANDED_OFF.value in states
+
+
 def record_reply(
     session: Session,
     campaign: Campaign,
@@ -67,10 +80,10 @@ def record_reply(
     if tag == "contact_later" and contact_later_on is None:
         raise ReplyError("give the date to contact them again")
     state = CampaignState(campaign.state)
-    if state is CampaignState.CANDIDATE:
-        raise ReplyError("no email was sent in this campaign yet")
     if state is CampaignState.CLOSED:
         raise ReplyError("this campaign is closed")
+    if state is not CampaignState.CONVERSATION and not reply_possible(session, campaign):
+        raise ReplyError("no email was sent in this campaign yet")
     if state is not CampaignState.CONVERSATION:
         if Mode(campaign.mode).is_real:
             handoff.report_reply(session, campaign, note=note, actor=actor, now=now)
@@ -138,7 +151,9 @@ def simulate(
         raise ReplyError("simulations exist only in practice mode")
     if kind not in SIMULATIONS:
         raise ReplyError("unknown simulation")
-    if CampaignState(campaign.state) in (CampaignState.CANDIDATE, CampaignState.CLOSED):
+    if CampaignState(campaign.state) is CampaignState.CLOSED or not reply_possible(
+        session, campaign
+    ):
         raise ReplyError("simulate after an email was sent")
     record_inbound(
         session,

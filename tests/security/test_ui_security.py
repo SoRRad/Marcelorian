@@ -143,7 +143,9 @@ def test_security_headers_present(client, security) -> None:
     assert "script-src 'self'" in csp and "frame-ancestors 'none'" in csp
     assert "unsafe-inline" not in csp
     assert response.headers["x-frame-options"] == "DENY"
-    assert response.headers["referrer-policy"] == "no-referrer"
+    # Not "no-referrer": with it, Chrome/Edge send "Origin: null" on form posts and every
+    # form fails the Origin check (found in a real-browser walkthrough of the tester guide).
+    assert response.headers["referrer-policy"] == "same-origin"
     assert response.headers["cache-control"] == "no-store"
 
 
