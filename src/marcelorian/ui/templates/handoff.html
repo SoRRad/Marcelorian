@@ -9,8 +9,8 @@
     {% if package.reply_in_outlook %}<li><strong>This is a follow-up:</strong> in Outlook, open your earlier email to {{ pi.full_name }}, press <em>Reply</em>, and paste the text below so it stays in the same conversation.</li>{% endif %}
     <li>
       {% if method == "link" and package.compose_url %}<a class="button" href="{{ package.compose_url }}" target="_blank" rel="noopener noreferrer">Open the email in Outlook on the web</a>{% if package.link_omits_attachments %}<br><span class="warn-text">The link cannot carry the CV: attach it in Outlook (or use the email file).</span>{% endif %}
-      {% elif method == "file" or not package.compose_url %}<a class="button" href="/handoffs/{{ attempt.attempt_uid }}/email.eml">Download the email file</a> <span class="note">Open it with Outlook; it opens as a new message with the CV attached.</span>
-      {% else %}<span class="note">Copy the text below into a new Outlook message to {{ package.to }}, subject "{{ package.subject }}".</span>{% endif %}
+      {% elif method == "file" %}<a class="button" href="/handoffs/{{ attempt.attempt_uid }}/email.eml">Download the email file</a> <span class="note">Open it with classic Outlook; it opens as a new message with the CV attached. If new Outlook opens it without a Send button, copy the text below instead.</span>
+      {% else %}{% if method == "link" %}<span class="warn-text">This email is too long for a link.</span> {% endif %}<span class="note">Copy the text below into a new Outlook message to {{ package.to }}, subject "{{ package.subject }}"{% if package.link_omits_attachments %}, and attach your CV{% endif %}.</span>{% endif %}
     </li>
     <li>Check it, make only small edits, and press <strong>Send</strong> in Outlook.</li>
     <li>Come back and record what happened.</li>
@@ -18,7 +18,7 @@
   <p>To: <strong>{{ package.to }}</strong> · Subject: <strong>{{ package.subject }}</strong></p>
   <textarea class="copy-text" rows="12" readonly data-copy>{{ package.body }}</textarea>
   <p class="quick-buttons"><button type="button" data-copy-button>Copy text</button>
-    {% if method != "file" %}<a href="/handoffs/{{ attempt.attempt_uid }}/email.eml">Email file instead</a>{% endif %}
+    {% if method != "file" %}<a href="/handoffs/{{ attempt.attempt_uid }}/email.eml">Email file (classic Outlook) instead</a>{% endif %}
     {% if method != "link" and package.compose_url %}<a href="{{ package.compose_url }}" target="_blank" rel="noopener noreferrer">Outlook link instead</a>{% endif %}</p>
   <div class="quick-buttons">
     <form method="post" action="/handoffs/{{ attempt.attempt_uid }}/sent" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -19,9 +19,13 @@ repositories; check your Actions allowance if the repository is private.
 
 ## 2. What to send the tester
 
-- The release link (or the zip itself).
+- The release link (or the zip itself). Tell them to **Unblock** the zip before
+  extracting it (tester guide, Part 1); otherwise Windows may block *Start Marcelorian*.
 - Their lead list `.csv` (it stays out of the repository: it names real people).
 - The guide: `docs/TESTER_GUIDE.md` (also inside the zip as *How to use Marcelorian.txt*).
+- Which Outlook they use decides the best send option: Outlook on the web or *Copy the
+  text* works for every account; the email file is for **classic** Outlook only.
+- Optionally, your NCBI contact address (section 7) for **Settings → Publication lookups**.
 
 ## 3. Before the tester switches to live mode
 
@@ -47,3 +51,24 @@ over; the app backs it up before updating the database. The old folder can be de
 Off by default. If the tester enters their own Anthropic API key in Settings, each
 "Suggest" click is one request billed to that key. Revoke it in the Anthropic console
 when the pilot ends.
+
+## 7. Publication lookups: NCBI registration and optional keys
+
+The app looks up PubMed, OpenAlex and NIH RePORTER without any account, paced below
+each service's published limit (PubMed 3 requests a second, OpenAlex 10, RePORTER 1).
+
+- **NCBI (PubMed):** every request names the tool `marcelorian`. NCBI asks the
+  *developer* to register that tool name with a contact address, and may block heavy
+  unregistered users. Register once by emailing `eutilities@ncbi.nlm.nih.gov` with the
+  tool name `marcelorian` and an address you check, then give the tester that address
+  to enter under **Settings → Publication lookups → NCBI contact address**. Use your own
+  or a project address, not the tester's.
+- **Optional keys** (free; each tester gets their own): an NCBI API key from their NCBI
+  account settings (10 requests a second instead of 3), and an OpenAlex key from
+  openalex.org (about 10,000 searches a day instead of about 1,000; OpenAlex no longer
+  uses the old `mailto` "polite pool"). Both are kept in the Windows Credential Manager
+  and removed by **Delete all my data**.
+- **Still to confirm on the tester's laptop:** one real NIH RePORTER lookup (the
+  `agencies: ["NEI"]` filter is documented but was not tried live) and one real OpenAlex
+  lookup for a PI with an ORCID. The app refuses an OpenAlex profile whose name does not
+  include the PI's last name (OpenAlex sometimes attaches an ORCID to the wrong record).

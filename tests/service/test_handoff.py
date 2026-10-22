@@ -154,7 +154,11 @@ def test_reopening_returns_the_same_email_without_a_second_handoff(outlook: Worl
     assert first.attempt_uid and first.package
     with transaction(outlook.factory) as s:
         again = handoff.package_for(s, first.attempt_uid)
+        attempt = s.scalar(select(SendAttempt).where(SendAttempt.attempt_uid == first.attempt_uid))
+        message_id = attempt.app_message_id
     assert again == first.package
+    parsed = email.message_from_bytes(first.package.eml, policy=default_policy)
+    assert parsed["Message-ID"] == message_id  # new Outlook needs one to save the draft
     assert outlook.hand_off(mid).outcome == Outcome.NOT_ELIGIBLE.value
     assert len(outlook.attempts(mid)) == 1
 

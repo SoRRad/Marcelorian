@@ -77,6 +77,7 @@ def test_outlook_handoff_in_live_mode(client, security, world) -> None:
     assert eml.headers["content-type"].startswith("message/rfc822")
     parsed = email.message_from_bytes(eml.content, policy=default_policy)
     assert parsed["X-Unsent"] == "1"
+    assert parsed["Message-ID"].startswith("<") and parsed["Message-ID"].endswith(">")
     assert "Alex Synthetic, MD" in parsed.get_body(("plain",)).get_content()
     response = post(client, f"{handoff_url}/sent", csrf, edited="yes")
     assert response.headers["location"] == f"/messages/{message_id}?notice=sent"

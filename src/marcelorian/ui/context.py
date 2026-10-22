@@ -12,7 +12,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, sessionmaker
 
 from marcelorian.clock import Clock, PracticeClock
+from marcelorian.lookups import keys as lookup_keys
 from marcelorian.lookups.bulk import BulkLookup
+from marcelorian.lookups.enrich import Keys
 from marcelorian.lookups.http import Fetcher
 from marcelorian.platform.paths import AppPaths
 from marcelorian.platform.secrets import SecretStore, open_secret_store
@@ -41,6 +43,10 @@ class UIContext:
     paths: AppPaths | None = None
     request_shutdown: Callable[[], None] | None = None
     bulk: BulkLookup | None = None
+
+    def lookup_keys(self) -> Keys:
+        """Keys for one lookup (opens the credential store only when a key is saved)."""
+        return lookup_keys.load(self.session_factory, self.secrets)
 
     def wake_worker(self) -> None:
         if self.worker is not None:

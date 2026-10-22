@@ -20,9 +20,10 @@
     {% endif %}
     <div class="quick-buttons">
       <button type="submit" name="method" value="link" class="primary">Open in Outlook on the web</button>
-      <button type="submit" name="method" value="file">Download email file</button>
       <button type="submit" name="method" value="copy">Copy the text</button>
+      <button type="submit" name="method" value="file">Email file (classic Outlook)</button>
     </div>
+    <p class="note">Outlook on the web works for any Outlook account. Copy the text works everywhere. The email file opens ready to send in classic Outlook; new Outlook may open it read-only.</p>
   </form>
   {% else %}
   <p class="warn-text">Not yet: {{ send.reason }}</p>

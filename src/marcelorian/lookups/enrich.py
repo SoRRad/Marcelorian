@@ -32,10 +32,15 @@ YEARS_BACK = 3  # spec §6: the last 3 years
 
 @dataclass(frozen=True)
 class Keys:
-    """Optional API keys (from the secret store); lookups work without them."""
+    """Optional API keys (from the secret store) and the NCBI contact address.
+
+    Lookups work without any of them; see ``lookups.keys``.
+    """
 
     ncbi: str = ""
     openalex: str = ""
+    #: The developer's address registered with NCBI for the ``tool`` name (not a secret).
+    ncbi_email: str = ""
 
 
 NO_KEYS = Keys()
@@ -96,12 +101,24 @@ def gather_for_pi(
     )
     if not query.orcid and term:
         term = term.replace("[au]", "[fau]", 1)  # "Last, First" full-author search
-    results = [_run("pubmed", lambda: sources.pubmed_search(fetcher, term, keys.ncbi))]
+    results = [
+        _run("pubmed", lambda: sources.pubmed_search(fetcher, term, keys.ncbi, keys.ncbi_email))
+    ]
 
     def openalex() -> list[Any]:
-        author = sources.openalex_author(
-            fetcher, orcid=query.orcid, openalex_id=query.openalex_id, api_key=keys.openalex
-        )
+        try:
+            author = sources.openalex_author(
+                fetcher,
+                orcid=query.orcid,
+                openalex_id=query.openalex_id,
+                api_key=keys.openalex,
+                last_name=query.last_name,
+            )
+        except sources.NameMismatch as exc:
+            raise LookupFailed(
+                f"openalex: that ID belongs to a profile named {str(exc)[:80]!r}, "
+                "not this PI; check the ORCID"
+            ) from None
         if author is None:
             return []
         works = sources.openalex_recent_works(fetcher, author.openalex_id, since, keys.openalex)
@@ -266,7 +283,7 @@ def gather_applicant_publications(
         term = f'"{names[-1]}, {" ".join(names[:-1])}"[fau]'
     else:
         return SourceResult("pubmed", False, [], "Enter your full name or ORCID iD first.")
-    return _run("pubmed", lambda: sources.pubmed_search(fetcher, term, keys.ncbi))
+    return _run("pubmed", lambda: sources.pubmed_search(fetcher, term, keys.ncbi, keys.ncbi_email))
 
 
 def store_applicant_publications(

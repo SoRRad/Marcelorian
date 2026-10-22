@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from marcelorian.db.models import Message
 from marcelorian.domain.enums import Actor, MessageState, RuntimePauseReason
+from marcelorian.lookups.keys import SECRET_NAMES as LOOKUP_SECRET_NAMES
 from marcelorian.platform.paths import AppPaths
 from marcelorian.platform.secrets import SecretStore, SecretStoreUnavailable
 from marcelorian.services import approvals, runtime
@@ -97,10 +98,13 @@ def perform_deletion(
     report = DeletionReport()
     if secrets is not None:
         try:
-            secrets().delete(KEY_NAME)
-            report.removed.append("Claude API key (Windows Credential Manager)")
+            store = secrets()
+            store.delete(KEY_NAME)
+            for name in LOOKUP_SECRET_NAMES.values():
+                store.delete(name)
+            report.removed.append("API keys (Windows Credential Manager)")
         except SecretStoreUnavailable:
-            report.failed.append("Claude API key (credential store unavailable)")
+            report.failed.append("API keys (credential store unavailable)")
     db = paths.db_path
     for suffix, label in (
         ("", "database"),

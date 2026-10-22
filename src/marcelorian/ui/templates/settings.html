@@ -61,6 +61,28 @@
   <p class="note">Sent to Anthropic: the PI's name and public publication titles, and your answers to: {{ ai_shared|join(", ") }}. Never sent: your visa or training status, contact details, CV, or any email text. Every suggestion must cite what it is based on, is checked by the app, and is only a draft you edit and approve.</p>
 </section>
 
+<section class="card" id="lookups">
+  <h2>Publication lookups (optional keys)</h2>
+  <p>Lookups work without keys. Free keys give a larger daily allowance, which helps with <strong>Look up all</strong> on a long list.</p>
+  {% for name, label in lookup_labels.items() %}
+  {% if lookup_keys[name] %}
+  <form method="post" action="/settings/lookup-key/{{ name }}/remove" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><span>{{ label }} key: <strong>saved</strong></span> <button type="submit">Remove</button></form>
+  {% else %}
+  <form method="post" action="/settings/lookup-key/{{ name }}" class="review" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>{{ label }} API key<input type="password" name="api_key" maxlength="200" autocomplete="off" spellcheck="false"></label>
+    <button type="submit">Save {{ label }} key</button>
+  </form>
+  {% endif %}
+  {% endfor %}
+  <form method="post" action="/settings/ncbi-email" class="review" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>NCBI contact address (from the program owner)<input type="email" name="email" maxlength="254" value="{{ ncbi_email }}" spellcheck="false"></label>
+    <button type="submit">Save address</button>
+  </form>
+  <p class="note">PubMed key: free from your NCBI account settings. OpenAlex key: free from openalex.org. Keys are kept in the Windows Credential Manager. The address is the one the program owner registered with NCBI for "marcelorian"; leave it empty if you were not given one.</p>
+</section>
+
 <section class="card">
   <h2>Your data</h2>
   <p><a href="/data">Reports for the program owner, backups, and deleting your data</a></p>
