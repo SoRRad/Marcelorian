@@ -12,14 +12,17 @@ You need: a Windows computer, your CV as a PDF, and the lead list file (.csv) fr
 1. Open the download link the program owner sent you.
 2. Under **Assets**, click the file that ends in **-windows.zip**. Wait for the download to finish.
 3. Open your **Downloads** folder.
-4. **Right-click** the zip file and choose **Extract All…**, then click **Extract**.
+4. **Right-click** the zip file and choose **Properties**. At the bottom, tick **Unblock**, then click **OK**.
+   - If there is no **Unblock** box, skip this step.
+5. **Right-click** the zip file again and choose **Extract All…**, then click **Extract**.
    - Do not open the program from inside the zip. Extract it first.
-5. Open the new **Marcelorian** folder.
-6. Double-click **Start Marcelorian**.
+6. Open the new **Marcelorian** folder.
+7. Double-click **Start Marcelorian**.
    - If Windows says **"Windows protected your PC"**: click **More info**, then **Run anyway**.
    - If Windows asks **"Do you want to run this file?"**: click **Run**.
-7. A black window opens. **Keep it open** while you use Marcelorian.
-8. Your web browser opens Marcelorian by itself.
+   - If Windows says it **blocked** the file and offers no **Run anyway**: delete the folder, and start again from step 4.
+8. A black window opens. **Keep it open** while you use Marcelorian.
+9. Your web browser opens Marcelorian by itself.
    - If it does not: click the black window and press **Enter**.
 
 **To stop:** close the black window.
@@ -83,8 +86,10 @@ Every email must be about **this** PI: their research, or a job they posted.
 1. Click **Settings**. Complete the **Before live mode** list.
 2. Under **Switch to**, choose **Live**, tick the box, and click **Switch**.
 3. Draft and approve an email as you practised.
-4. When the send button unlocks, click **Open in Outlook on the web**.
-   - Outlook opens with the email ready. Check it, then press **Send** in Outlook.
+4. When the send button unlocks, choose how to open it:
+   - **Open in Outlook on the web** (best for most people): Outlook opens with the email ready. Attach your CV, check it, then press **Send** in Outlook.
+   - **Copy the text**: works with any Outlook. Make a new email, paste the text, use the address and subject shown, attach your CV, and press **Send**.
+   - **Email file (classic Outlook)**: only for the older Outlook app. It opens ready to send with your CV attached. The new Outlook app may open it without a **Send** button; if so, use **Copy the text**.
 5. Come back to Marcelorian and click **I sent it**.
    - If you did not send it, click **I did not send it**.
 
@@ -110,6 +115,7 @@ Every email must be about **this** PI: their research, or a job they posted.
 - **The browser page says it cannot connect:** Marcelorian is closed. Double-click **Start Marcelorian**.
 - **"Marcelorian is already running":** use the black window that is already open, and press **Enter** in it.
 - **Send button is locked:** the email waits for the lab's working hours. The page shows when it unlocks.
+- **Outlook on the web opens but the email is empty, or shows `+` between words:** sign in to Outlook on the web first, then click the button again. Or use **Copy the text**.
 - **A yellow bar at the top:** it lists what needs you now. Click an item to go there.
 - **Something else:** take a photo of the screen and the black window, and send it to the program owner.
 

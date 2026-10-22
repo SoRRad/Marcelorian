@@ -1,4 +1,4 @@
-"""Settings: mode switch with the live readiness checklist, practice time, templates, Claude."""
+"""Settings: mode switch, live readiness checklist, practice time, templates, Claude, lookups."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from marcelorian.config.settings import load_settings
 from marcelorian.db.engine import transaction
 from marcelorian.db.models import Message
 from marcelorian.domain.enums import Actor, Mode
+from marcelorian.lookups import keys as lookup_keys
 from marcelorian.platform.secrets import SecretStoreUnavailable
 from marcelorian.services import ai, drafting, handoff, practice, runtime
 from marcelorian.services.profile import FIELD_BY_KEY
@@ -56,6 +57,9 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 "templates": {step: drafting.template(db, step) for step in (1, 2, 3, 4)},
                 "settings": load_settings(db),
                 "ai_on": ai.key_saved(db),
+                "lookup_keys": lookup_keys.saved(db),
+                "lookup_labels": lookup_keys.LABELS,
+                "ncbi_email": lookup_keys.contact_email(db),
                 "ai_usage": ai.usage(db),
                 "ai_model": ai.MODEL,
                 "ai_shared": [drafting_label(k) for k in ai.SHARED_FACTS],
@@ -159,6 +163,45 @@ def register(app: FastAPI, ui: UIContext) -> None:
         with transaction(ui.session_factory) as db:
             ai.record_key(db, False, now=ui.clock.now())
         return _back("ai", notice="Key removed. Claude suggestions are off.")
+
+    @app.post("/settings/lookup-key/{name}")
+    def save_lookup_key(name: str, api_key: str = Form("")) -> RedirectResponse:
+        if name not in lookup_keys.SECRET_NAMES:
+            raise HTTPException(status_code=404)
+        try:  # credential store only: outside any database transaction
+            lookup_keys.check_and_store(ui.secrets(), name, api_key)
+        except SecretStoreUnavailable:
+            return _back(
+                "lookups", error="The Windows Credential Manager is unavailable on this computer."
+            )
+        except lookup_keys.KeyInputError as exc:
+            return _back("lookups", error=str(exc))
+        with transaction(ui.session_factory) as db:
+            lookup_keys.record(db, name, True, now=ui.clock.now())
+        return _back("lookups", notice=f"{lookup_keys.LABELS[name]} key saved.")
+
+    @app.post("/settings/lookup-key/{name}/remove")
+    def remove_lookup_key(name: str) -> RedirectResponse:
+        if name not in lookup_keys.SECRET_NAMES:
+            raise HTTPException(status_code=404)
+        try:
+            ui.secrets().delete(lookup_keys.SECRET_NAMES[name])
+        except SecretStoreUnavailable:
+            return _back(
+                "lookups", error="The Windows Credential Manager is unavailable on this computer."
+            )
+        with transaction(ui.session_factory) as db:
+            lookup_keys.record(db, name, False, now=ui.clock.now())
+        return _back("lookups", notice=f"{lookup_keys.LABELS[name]} key removed.")
+
+    @app.post("/settings/ncbi-email")
+    def save_ncbi_email(email: str = Form("")) -> RedirectResponse:
+        with transaction(ui.session_factory) as db:
+            try:
+                lookup_keys.set_contact_email(db, email, now=ui.clock.now())
+            except lookup_keys.KeyInputError as exc:
+                return _back("lookups", error=str(exc))
+        return _back("lookups", notice="NCBI contact address saved.")
 
 
 def drafting_label(key: str) -> str:

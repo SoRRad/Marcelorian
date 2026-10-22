@@ -94,7 +94,8 @@ def register(app: FastAPI, ui: UIContext) -> None:
             facts = profile.facts(db, me.id)
             name = facts["full_name"].value if "full_name" in facts else ""
             orcid = facts["orcid"].value if "orcid" in facts else ""
-        result = enrich.gather_applicant_publications(name, orcid, ui.fetcher)  # no DB open
+        keys = ui.lookup_keys()  # no DB open from here to the store
+        result = enrich.gather_applicant_publications(name, orcid, ui.fetcher, keys)
         with transaction(ui.session_factory) as db:
             enrich.store_applicant_publications(db, me.id, result, ui.clock.now())
         return _back("publications", None if result.ok else result.message)

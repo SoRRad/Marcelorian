@@ -629,3 +629,26 @@ owner's written description of each finding.
     it would have caught that bug. (c) **Superseded releases**: the Package
     workflow's release job marks every older pre-release with a notice linking to the
     new one (idempotent; `packaging/supersede_releases.sh`).
+53. **API and Outlook verification (2026-10-22).** An outside check of the live
+    services and Microsoft's documentation led to these changes. (a) **Pacing**:
+    the shared fetcher spaces requests per service below the published limits
+    (PubMed 0.34 s, OpenAlex 0.1 s, NIH RePORTER 1 s), thread-safe, because the bulk
+    run and the screens share it. (b) **NCBI identification**: every E-utilities call
+    sends `tool=marcelorian`, plus `email` when the applicant enters the address the
+    owner registered with NCBI (Settings; not hardcoded). (c) **OpenAlex ORCID
+    guard**: an author record whose display name and alternatives do not contain
+    the PI's last name (whole words, accents and hyphens folded) is refused with a
+    message, because OpenAlex sometimes attaches an ORCID to a merged record. (d)
+    **Optional keys**: NCBI and OpenAlex keys can be saved in Settings (Windows
+    Credential Manager; the database only records whether one is saved); single,
+    bulk and own-publication lookups use them; Delete all my data removes them.
+    OpenAlex's `mailto` is ignored now, so it is not sent. (e) **Outlook**: the link
+    already encodes spaces as `%20`; personal Microsoft addresses (outlook.com,
+    hotmail.com, live.com, msn.com and country versions) get the
+    outlook.live.com/mail/0 link; the `.eml` carries the attempt's Message-ID (new
+    Outlook needs one to save the draft) and is labelled "classic Outlook" and
+    offered last, because new Outlook may open it read-only; a too-long link falls
+    back to copy text instead of the file. (f) **Tester guide**: Unblock the zip
+    before extracting (Mark-of-the-Web otherwise passes to the extracted files). The
+    RePORTER request is unchanged (documented; `NEI` not confirmed live) and needs
+    one real lookup on the tester's laptop, as do both Outlook link hosts.

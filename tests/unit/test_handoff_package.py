@@ -14,10 +14,12 @@ from marcelorian.domain.enums import Channel, Mode
 from marcelorian.domain.handoff import (
     MAX_LINK_CHARS,
     OUTLOOK_COMPOSE_URL,
+    OUTLOOK_PERSONAL_COMPOSE_URL,
     body_with_signature,
     build_eml,
     build_package,
     compose_url,
+    is_personal_account,
 )
 from marcelorian.domain.snapshot import (
     SnapshotError,
@@ -86,6 +88,45 @@ def test_link_prefills_outlook_without_the_signature() -> None:
     assert url is not None and url.startswith(OUTLOOK_COMPOSE_URL + "?")
     query = parse_qs(urlsplit(url).query)
     assert query == {"to": [c.to], "subject": [c.subject], "body": [c.body]}
+
+
+def test_link_encodes_spaces_as_percent_20() -> None:
+    url = compose_url("pi@synthetic-univ.test", "A subject", "Dear Dr. Lee, hello")
+    assert url is not None and "+" not in url and "A%20subject" in url
+
+
+@pytest.mark.parametrize(
+    "sender,personal",
+    [
+        ("alex@outlook.com", True),
+        ("alex@Hotmail.com", True),
+        ("alex@live.com", True),
+        ("alex@msn.com", True),
+        ("alex@hotmail.co.uk", True),
+        ("alex@outlook.fr", True),
+        ("alex@live.unc.edu", False),  # a university domain that starts with "live."
+        ("alex@synthetic-univ.edu", False),
+        ("alex@outlook.synthetic-univ.edu", False),
+        ("", False),
+    ],
+)
+def test_personal_accounts_get_the_outlook_com_link(sender: str, personal: bool) -> None:
+    assert is_personal_account(sender) is personal
+    url = compose_url("pi@synthetic-univ.test", "S", "B", sender)
+    base = OUTLOOK_PERSONAL_COMPOSE_URL if personal else OUTLOOK_COMPOSE_URL
+    assert url is not None and url.startswith(base + "?")
+
+
+def test_eml_carries_the_attempt_message_id() -> None:
+    c = content()
+    parsed = _parse(build_eml(c, {CV_REF.sha256: CV}, "", "<0123abcd@synthetic-univ.test>"))
+    assert parsed["Message-ID"] == "<0123abcd@synthetic-univ.test>"
+    assert parsed["From"] is None and parsed["Date"] is None
+    for bad in ("0123abcd@synthetic-univ.test", "<a@b>\r\nBcc: x@y.test", "<no-at-sign>"):
+        with pytest.raises((ValueError, SnapshotError)):
+            build_eml(c, {CV_REF.sha256: CV}, "", bad)
+    package = build_package(c, {CV_REF.sha256: CV}, "", "<0123abcd@synthetic-univ.test>")
+    assert _parse(package.eml)["Message-ID"] == "<0123abcd@synthetic-univ.test>"
 
 
 def test_long_email_has_no_link() -> None:

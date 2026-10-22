@@ -7,8 +7,9 @@ button, and never touches sending (spec: discovery never delays safety work).
   Because each finished contact records its lookup runs, stopping and starting again
   simply continues with the ones not done yet (resumable).
 * How: the same free, read-only PubMed/OpenAlex/NIH RePORTER calls as the single lookup,
-  one contact at a time with a pause between contacts, so the services are not
-  hammered. Network calls happen outside any database transaction.
+  one contact at a time with a pause between contacts (and the fetcher's own
+  per-service pacing), so the services are not hammered. Saved lookup keys apply.
+  Network calls happen outside any database transaction.
 * A contact whose sources all failed is counted as failed and is tried again next time.
 """
 
@@ -81,12 +82,14 @@ class BulkLookup:
         *,
         pause: float = PAUSE_SECONDS,
         on_contact_done: Callable[[], None] | None = None,
+        keys: Callable[[], enrich.Keys] = lambda: enrich.NO_KEYS,
     ) -> None:
         self._factory = session_factory
         self._fetcher = fetcher
         self._clock = clock
         self._pause = pause
         self._on_contact_done = on_contact_done
+        self._keys = keys
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._progress = Progress()
@@ -127,11 +130,12 @@ class BulkLookup:
 
     def _run(self, ids: list[int]) -> None:
         try:
+            keys = self._keys()  # read once per run, in this thread
             for pi_id in ids:
                 if self._stop.is_set():
                     self._update(stopped=True)
                     break
-                self._one(pi_id)
+                self._one(pi_id, keys)
                 if self._stop.wait(self._pause):
                     self._update(stopped=True)
                     break
@@ -140,7 +144,7 @@ class BulkLookup:
         finally:
             self._update(running=False, current="", finished_at=self._clock.now())
 
-    def _one(self, pi_id: int) -> None:
+    def _one(self, pi_id: int, keys: enrich.Keys) -> None:
         with transaction(self._factory) as session:
             try:
                 query = enrich.pi_query(session, pi_id)
@@ -148,7 +152,7 @@ class BulkLookup:
                 self._update(done=self.progress().done + 1)
                 return
         self._update(current=f"{query.first_name} {query.last_name}".strip())
-        results = enrich.gather_for_pi(query, self._fetcher, self._clock.now().date())
+        results = enrich.gather_for_pi(query, self._fetcher, self._clock.now().date(), keys)
         with transaction(self._factory) as session:
             enrich.store_pi_results(session, pi_id, results, self._clock.now())
         progress = self.progress()

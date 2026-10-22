@@ -45,6 +45,7 @@ from marcelorian.domain.research import (
     confidence,
     is_web_url,
 )
+from marcelorian.lookups import keys as lookup_keys
 from marcelorian.lookups.bulk import PAUSE_SECONDS, BulkLookup
 from marcelorian.lookups.http import Fetcher, HttpFetcher
 from marcelorian.platform.paths import AppPaths
@@ -158,7 +159,14 @@ def create_app(
     worker = BackgroundWorker(session_factory, clock, practice_clock, transports, syncs, jobs=jobs)
     app.state.worker = worker
     the_fetcher = fetcher or HttpFetcher()
-    bulk = BulkLookup(session_factory, the_fetcher, clock, pause=lookup_pause)
+    the_secrets = secrets or open_secret_store
+    bulk = BulkLookup(
+        session_factory,
+        the_fetcher,
+        clock,
+        pause=lookup_pause,
+        keys=lambda: lookup_keys.load(session_factory, the_secrets),
+    )
     ui = UIContext(
         templates,
         session_factory,
@@ -167,7 +175,7 @@ def create_app(
         the_fetcher,
         practice_clock,
         gateway,
-        secrets or open_secret_store,
+        the_secrets,
         ai_client or AnthropicClient,
         worker,
         paths,

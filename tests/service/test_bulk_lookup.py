@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 
 from marcelorian.db.engine import transaction
 from marcelorian.db.models import Evidence, LookupRun
-from marcelorian.lookups import bulk
+from marcelorian.lookups import bulk, enrich
 from tests.fakes.lookups import FakeFetcher
 
 ALL_SOURCES = {"esearch", "esummary", "openalex_author", "openalex_works", "reporter"}
@@ -90,3 +90,20 @@ def test_progress_is_safe_to_read_while_running(world) -> None:
         assert runner.progress().done <= runner.progress().total
     runner.join(10)
     assert runner.progress().done == 1
+
+
+def test_saved_keys_are_used_for_the_whole_run(world) -> None:
+    inst = world.institution()
+    world.pi(inst, name="Pat Example0")
+    world.pi(inst, name="Pat Example1")
+    fetcher = FakeFetcher()
+    loads: list[int] = []
+
+    def keys():
+        loads.append(1)
+        return enrich.Keys(ncbi="n-key", ncbi_email="owner@example.org")
+
+    run(world, fetcher, keys=keys)
+    pubmed = [p for u, p in fetcher.calls if "eutils" in u]
+    assert len(pubmed) == 4 and all(p["api_key"] == "n-key" for p in pubmed)
+    assert loads == [1]  # read once per run, not once per contact

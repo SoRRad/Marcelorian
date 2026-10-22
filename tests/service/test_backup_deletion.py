@@ -135,10 +135,13 @@ def test_perform_deletion_removes_app_files_and_key(paths, clock) -> None:
     (paths.data_dir / deletion.MARKER).write_text("x")
     store = InMemorySecretStore()
     store.set(KEY_NAME, "sk-ant-synthetic-key-0000")
+    store.set("ncbi_api_key", "synthetic-ncbi-key-000000")
+    store.set("openalex_api_key", "synthetic-openalex-key-00")
     factory.kw["bind"].dispose()
     report = deletion.perform_deletion(paths, lambda: store)
     assert not report.failed
     assert store.get(KEY_NAME) is None
+    assert store.get("ncbi_api_key") is None and store.get("openalex_api_key") is None
     for gone in (paths.db_path, paths.backups_dir, paths.logs_dir, paths.exports_dir):
         assert not gone.exists(), gone
     assert not deletion.requested(paths.data_dir)

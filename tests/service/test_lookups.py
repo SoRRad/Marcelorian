@@ -60,6 +60,33 @@ def test_name_search_without_identifiers_and_a_failing_source(world) -> None:
         assert s.scalar(select(func.count()).select_from(LookupRun)) == 3
 
 
+def test_an_orcid_profile_under_another_name_is_not_used(world) -> None:
+    pi = world.pi(world.institution(), name="Taylor Nguyen")
+    with transaction(world.factory) as s:
+        s.get(Pi, pi).orcid = "0000-0002-1825-0097"  # OpenAlex answers with "Alex Example"
+    added = lookup(world, pi, FakeFetcher())
+    assert added["openalex"] == 0 and added["pubmed"] == 2
+    with transaction(world.factory) as s:
+        run = enrich.last_runs(s, pi)["openalex"]
+        assert run.ok is False and "Alex Example" in run.message and "ORCID" in run.message
+        assert not [e for e in enrich.evidence_for(s, pi) if e.kind == "profile"]
+
+
+def test_saved_keys_and_contact_reach_the_services(world) -> None:
+    pi = world.pi(world.institution(), name="Alex Example")
+    with transaction(world.factory) as s:
+        s.get(Pi, pi).orcid = "0000-0002-1825-0097"
+        query = enrich.pi_query(s, pi)
+    fetcher = FakeFetcher()
+    keys = enrich.Keys(ncbi="n-key", openalex="o-key", ncbi_email="owner@example.org")
+    enrich.gather_for_pi(query, fetcher, TODAY, keys)
+    pubmed = [p for u, p in fetcher.calls if "eutils" in u]
+    openalex = [p for u, p in fetcher.calls if "openalex" in u]
+    assert pubmed and all(p["api_key"] == "n-key" for p in pubmed)
+    assert all(p["email"] == "owner@example.org" for p in pubmed)
+    assert openalex and all(p["api_key"] == "o-key" for p in openalex)
+
+
 def test_applicant_publications_are_proposed_then_decided(world) -> None:
     result = enrich.gather_applicant_publications("Alex Example", "", FakeFetcher())
     with transaction(world.factory) as s:

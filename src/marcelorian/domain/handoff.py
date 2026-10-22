@@ -3,10 +3,15 @@
 Built only from the verified approval snapshot, like the Gmail MIME:
 
 * a link that opens a pre-filled new message in Outlook on the web (no signature:
-  Outlook adds the account's own), or ``None`` when the URL would be too long;
-* an ``.eml`` file Outlook opens as an editable unsent message (``X-Unsent: 1``),
-  with the approved To, subject, body, signature setting and attachments, and no
-  From/Date/Message-ID (Outlook supplies them for the signed-in account);
+  Outlook adds the account's own), or ``None`` when the URL would be too long. Work and
+  school accounts use outlook.office.com; personal Microsoft addresses (outlook.com,
+  hotmail.com, live.com, msn.com) use outlook.live.com. Microsoft does not document
+  this link (checked 2026-10-22), so spaces are sent as ``%20``, never ``+``;
+* an ``.eml`` file that classic Outlook opens as an editable unsent message
+  (``X-Unsent: 1``), with the approved To, subject, body, signature setting and
+  attachments, and the attempt's Message-ID (new Outlook will not save such a draft
+  without one). No From or Date: Outlook supplies them for the signed-in account. New
+  Outlook may still open it read-only, so the screens offer it last;
 * the same To, subject and body as copy text.
 
 Follow-ups keep their thread only when the applicant replies to the earlier email in
@@ -16,6 +21,7 @@ new thread (owner test pending, P0.3b).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -26,6 +32,11 @@ from marcelorian.domain.mime import MimeAddressError, _single_mailbox
 from marcelorian.domain.snapshot import SnapshotContent, SnapshotError, sha256_hex
 
 OUTLOOK_COMPOSE_URL = "https://outlook.office.com/mail/deeplink/compose"
+OUTLOOK_PERSONAL_COMPOSE_URL = "https://outlook.live.com/mail/0/deeplink/compose"
+_PERSONAL_DOMAINS = frozenset({"outlook.com", "hotmail.com", "live.com", "msn.com"})
+#: Country versions such as hotmail.co.uk or outlook.fr (not e.g. live.unc.edu).
+_PERSONAL_COUNTRY = re.compile(r"(outlook|hotmail|live)\.(co\.)?[a-z]{2}")
+_MESSAGE_ID = re.compile(r"<[^<>@\s]+@[^<>@\s]+>")
 #: Browsers and Outlook truncate long URLs; beyond this only the file and copy text work.
 MAX_LINK_CHARS = 2000
 
@@ -53,17 +64,31 @@ def body_with_signature(body: str, signature: str) -> str:
     return body.rstrip("\n") + "\n\n" + sig + "\n"
 
 
-def compose_url(to: str, subject: str, body: str) -> str | None:
+def is_personal_account(sender: str) -> bool:
+    """A personal Microsoft account (Outlook.com), as opposed to work or school."""
+    domain = sender.strip().rpartition("@")[2].lower()
+    return domain in _PERSONAL_DOMAINS or bool(_PERSONAL_COUNTRY.fullmatch(domain))
+
+
+def compose_url(to: str, subject: str, body: str, sender: str = "") -> str | None:
     query = urlencode({"to": to, "subject": subject, "body": body}, quote_via=quote)
-    url = f"{OUTLOOK_COMPOSE_URL}?{query}"
+    base = OUTLOOK_PERSONAL_COMPOSE_URL if is_personal_account(sender) else OUTLOOK_COMPOSE_URL
+    url = f"{base}?{query}"
     return url if len(url) <= MAX_LINK_CHARS else None
 
 
 def build_eml(
-    content: SnapshotContent, attachment_bytes: Mapping[str, bytes], signature: str
+    content: SnapshotContent,
+    attachment_bytes: Mapping[str, bytes],
+    signature: str,
+    message_id: str = "",
 ) -> bytes:
     msg = EmailMessage(policy=SMTP)  # refuses CR/LF in header values
     msg["X-Unsent"] = "1"
+    if message_id:
+        if not _MESSAGE_ID.fullmatch(message_id):
+            raise SnapshotError("the Message-ID is malformed")
+        msg["Message-ID"] = message_id
     msg["To"] = content.to
     msg["Subject"] = content.subject
     _single_mailbox(msg, "To", content.to)
@@ -106,14 +131,17 @@ def build_eml(
 
 
 def build_package(
-    content: SnapshotContent, attachment_bytes: Mapping[str, bytes], signature: str
+    content: SnapshotContent,
+    attachment_bytes: Mapping[str, bytes],
+    signature: str,
+    message_id: str = "",
 ) -> HandoffPackage:
     return HandoffPackage(
         to=content.to,
         subject=content.subject,
         body=body_with_signature(content.body, signature),
-        compose_url=compose_url(content.to, content.subject, content.body),
-        eml=build_eml(content, attachment_bytes, signature),
+        compose_url=compose_url(content.to, content.subject, content.body, content.sender),
+        eml=build_eml(content, attachment_bytes, signature, message_id),
         # No names or addresses in the file name: it lands in the Downloads folder.
         eml_filename=f"marcelorian-email{content.step}-{content.message_id}.eml",
         link_omits_attachments=bool(content.attachments),

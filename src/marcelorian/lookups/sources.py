@@ -7,6 +7,7 @@ loses another source's results.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -17,6 +18,9 @@ EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 OPENALEX = "https://api.openalex.org"
 REPORTER = "https://api.reporter.nih.gov/v2/projects/search"
 MAX_ITEMS = 20
+#: NCBI asks every caller to name its software (``tool``, no spaces) and, once the
+#: owner has registered it, a contact address for the developer (``email``).
+NCBI_TOOL = "marcelorian"
 
 
 @dataclass(frozen=True)
@@ -74,7 +78,18 @@ def pubmed_term(name: str = "", affiliation: str = "", orcid: str = "", since_ye
     return " AND ".join(parts)
 
 
-def pubmed_search(fetcher: Fetcher, term: str, api_key: str = "") -> list[Publication]:
+def _ncbi_params(api_key: str, email: str) -> dict[str, str]:
+    params = {"tool": NCBI_TOOL}
+    if email:
+        params["email"] = email
+    if api_key:
+        params["api_key"] = api_key
+    return params
+
+
+def pubmed_search(
+    fetcher: Fetcher, term: str, api_key: str = "", email: str = ""
+) -> list[Publication]:
     if not term:
         return []
     params = {
@@ -83,16 +98,18 @@ def pubmed_search(fetcher: Fetcher, term: str, api_key: str = "") -> list[Public
         "retmode": "json",
         "retmax": str(MAX_ITEMS),
         "sort": "pub_date",
+        **_ncbi_params(api_key, email),
     }
-    if api_key:
-        params["api_key"] = api_key
     found = fetcher.get_json(f"{EUTILS}/esearch.fcgi", params)
     ids = [i for i in (found.get("esearchresult", {}).get("idlist") or []) if str(i).isdigit()]
     if not ids:
         return []
-    summary_params = {"db": "pubmed", "id": ",".join(ids[:MAX_ITEMS]), "retmode": "json"}
-    if api_key:
-        summary_params["api_key"] = api_key
+    summary_params = {
+        "db": "pubmed",
+        "id": ",".join(ids[:MAX_ITEMS]),
+        "retmode": "json",
+        **_ncbi_params(api_key, email),
+    }
     summary = fetcher.get_json(f"{EUTILS}/esummary.fcgi", summary_params)
     result = summary.get("result", {}) if isinstance(summary, dict) else {}
     publications = []
@@ -143,9 +160,36 @@ def _pubmed_date(item: dict[str, Any]) -> str:
 # --------------------------------------------------------------------------- #
 
 
+class NameMismatch(ValueError):
+    """The OpenAlex profile found by ID is not named like this PI."""
+
+
+def _folded(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text)
+    letters = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^\w]+", " ", letters.casefold()).split())
+
+
+def name_matches(last_name: str, names: list[str]) -> bool:
+    """True when the PI's last name appears, as whole words, in one of the names."""
+    wanted = _folded(last_name)
+    return not wanted or any(f" {wanted} " in f" {_folded(n)} " for n in names)
+
+
 def openalex_author(
-    fetcher: Fetcher, *, orcid: str = "", openalex_id: str = "", api_key: str = ""
+    fetcher: Fetcher,
+    *,
+    orcid: str = "",
+    openalex_id: str = "",
+    api_key: str = "",
+    last_name: str = "",
 ) -> AuthorProfile | None:
+    """The OpenAlex profile for an ORCID or OpenAlex ID.
+
+    OpenAlex sometimes attaches an ORCID to a merged or wrong author record (seen
+    2026-10-22). With ``last_name`` given, a profile whose names do not include it
+    raises ``NameMismatch`` instead of lending someone else's topics to this PI.
+    """
     params = {"per_page": "1"}
     if api_key:
         params["api_key"] = api_key
@@ -160,6 +204,11 @@ def openalex_author(
     if not rows or not isinstance(rows[0], dict):
         return None
     row = rows[0]
+    names = [_text(row.get("display_name"))] + [
+        _text(n) for n in row.get("display_name_alternatives") or [] if isinstance(n, str)
+    ]
+    if not name_matches(last_name, names):
+        raise NameMismatch(names[0])
     return AuthorProfile(
         openalex_id=_text(row.get("id")).rsplit("/", 1)[-1],
         orcid=_text(row.get("orcid")).rsplit("/", 1)[-1],

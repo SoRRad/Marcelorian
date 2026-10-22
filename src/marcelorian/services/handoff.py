@@ -2,7 +2,7 @@
 
 The app has no access to the Outlook mailbox. A hand-off runs every final check that
 needs no mailbox (``gateway.final_checks``) at the instant the applicant presses
-**Open in Outlook** / **Download email file**, records a ``send_attempt`` with
+**Open in Outlook** / **Copy the text** / **Email file**, records a ``send_attempt`` with
 status ``handed_off`` (budget held, pacing recorded), and returns the email
 (``domain.handoff``). The applicant sends it from Outlook and records **Sent** or
 **Not sent**. The mailbox searches the Gmail gateway runs are replaced by the
@@ -308,7 +308,10 @@ def hand_off(
         content = verify_canonical(snapshot.canonical_json, snapshot.sha256)
         signature = settings.email_signature
         try:  # built before anything is recorded, so a failure leaves no hand-off
-            package = build_package(content, _attachment_bytes(session, content), signature)
+            app_message_id = rfc_message_id(content.sender)
+            package = build_package(
+                content, _attachment_bytes(session, content), signature, app_message_id
+            )
         except (ValueError, SnapshotError):
             verdict = Verdict(Outcome.BLOCKED, "email_not_buildable", invalidate=True)
     if verdict is not None:
@@ -327,8 +330,8 @@ def hand_off(
         sender=content.sender,
         recipient=content.to,
         intended_recipient=content.intended_recipient,
-        # Never sent by the app; kept unique for the attempt record (B12).
-        app_message_id=rfc_message_id(content.sender),
+        # In the .eml file (new Outlook needs one to save the draft); unique per attempt.
+        app_message_id=app_message_id,
         x_marcelorian_id=new_x_marcelorian_id(),
         status=AttemptStatus.HANDED_OFF.value,
         claimed_at=now,
@@ -391,7 +394,9 @@ def package_for(session: Session, attempt_uid: str) -> HandoffPackage:
     if event is None or not event.detail_json:
         raise HandoffError("the hand-off record is missing")
     signature = str(json.loads(event.detail_json).get("signature", ""))
-    return build_package(content, _attachment_bytes(session, content), signature)
+    return build_package(
+        content, _attachment_bytes(session, content), signature, attempt.app_message_id
+    )
 
 
 def record_sent(

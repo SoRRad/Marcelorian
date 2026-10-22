@@ -140,7 +140,8 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 query = enrich.pi_query(db, pi_id)
             except LookupError as exc:
                 raise HTTPException(status_code=404) from exc
-        results = enrich.gather_for_pi(query, ui.fetcher, ui.clock.now().date())  # no DB open
+        keys = ui.lookup_keys()  # no DB open from here to the store
+        results = enrich.gather_for_pi(query, ui.fetcher, ui.clock.now().date(), keys)
         with transaction(ui.session_factory) as db:
             enrich.store_pi_results(db, pi_id, results, ui.clock.now())
         return RedirectResponse(f"/candidates/{pi_id}#evidence", status_code=303)
