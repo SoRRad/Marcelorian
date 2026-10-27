@@ -46,11 +46,11 @@ Publish a new version, and have the tester download and extract it, then start t
 folder. Their data lives in `%LOCALAPPDATA%\Marcelorian` (not in the folder), so it carries
 over; the app backs it up before updating the database. The old folder can be deleted.
 
-## 6. Claude suggestions (optional)
+## 6. Claude suggestions (removed for now)
 
-Off by default. If the tester enters their own Anthropic API key in Settings, each
-"Suggest" click is one request billed to that key. Revoke it in the Anthropic console
-when the pilot ends.
+The Claude section is hidden since v0.2.0 (owner decision 2026-10-27). Personal lines are
+now prefilled for free from the PI's papers, topics and grants, and the tester edits them.
+An API key saved earlier stays in the Credential Manager until **Delete all my data**.
 
 ## 7. Publication lookups: NCBI registration and optional keys
 

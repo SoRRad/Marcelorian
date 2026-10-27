@@ -57,7 +57,8 @@ jobs:
     # Real-browser walkthrough of the tester guide (tests/e2e). Unit tests set headers by
     # hand; this catches what only a browser does (it found the "Origin: null" form bug).
     name: browser walkthrough (chromium)
-    runs-on: ubuntu-latest
+    # Pinned: Playwright 1.56 cannot install Chromium on ubuntu-latest (26.04) yet.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5

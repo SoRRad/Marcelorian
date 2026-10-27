@@ -17,8 +17,9 @@ from marcelorian.services import approvals, profile
 from marcelorian.ui.context import UIContext
 
 
-def _back(anchor: str, error: str | None = None) -> RedirectResponse:
-    query = f"?{urlencode({'error': error[:300]})}" if error else ""
+def _back(anchor: str, error: str | None = None, *, notice: str | None = None) -> RedirectResponse:
+    params = {k: v[:300] for k, v in (("error", error), ("notice", notice)) if v}
+    query = f"?{urlencode(params)}" if params else ""
     return RedirectResponse(f"/profile{query}#{anchor}", status_code=303)
 
 
@@ -38,6 +39,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 "signature_done": settings.signature_step_done,
                 "mailbox": approvals._active_mailbox(db),
                 "error": request.query_params.get("error", ""),
+                "notice": request.query_params.get("notice", ""),
                 "publications": enrich.applicant_publications(db, me.id),
                 "pub_run": enrich.last_runs(db, None).get("pubmed"),
             }
@@ -65,6 +67,38 @@ def register(app: FastAPI, ui: UIContext) -> None:
             except profile.ProfileError as exc:
                 return _back(f"f-{key}", str(exc))
         return _back(f"f-{key}")
+
+    @app.post("/profile/facts")
+    async def save_all_facts(request: Request) -> RedirectResponse:
+        """Save and confirm every answer in one go; unchanged confirmed answers stay as they
+        are, so approvals that used them are not withdrawn."""
+        form = await request.form()
+        problems: list[str] = []
+        changed = 0
+        with transaction(ui.session_factory) as db:
+            now = ui.clock.now()
+            me = profile.applicant(db, now)
+            current = profile.facts(db, me.id)
+            for field in profile.FIELDS:
+                name = f"v_{field.key}"
+                if name not in form:
+                    continue
+                value = str(form.get(name, "")).strip()
+                fact = current.get(field.key)
+                if fact is None and not value:
+                    continue
+                if fact is not None and fact.status == "confirmed" and fact.value == value:
+                    continue
+                try:
+                    profile.set_fact(
+                        db, me.id, field.key, value, confirm=True, actor=Actor.APPLICANT, now=now
+                    )
+                    changed += 1
+                except profile.ProfileError as exc:
+                    problems.append(f"{field.label}: {exc}")
+        if problems:
+            return _back("profile-form", " ".join(problems))
+        return _back("profile-form", notice=f"Saved and confirmed ({changed} changed).")
 
     @app.post("/profile/cv")
     async def upload_cv(file: UploadFile = File(...)) -> RedirectResponse:  # noqa: B008
@@ -94,11 +128,25 @@ def register(app: FastAPI, ui: UIContext) -> None:
             facts = profile.facts(db, me.id)
             name = facts["full_name"].value if "full_name" in facts else ""
             orcid = facts["orcid"].value if "orcid" in facts else ""
+            pubmed_name = facts["pubmed_name"].value if "pubmed_name" in facts else ""
         keys = ui.lookup_keys()  # no DB open from here to the store
-        result = enrich.gather_applicant_publications(name, orcid, ui.fetcher, keys)
+        result = enrich.gather_applicant_publications(
+            name, orcid, ui.fetcher, keys, pubmed_name=pubmed_name
+        )
         with transaction(ui.session_factory) as db:
-            enrich.store_applicant_publications(db, me.id, result, ui.clock.now())
-        return _back("publications", None if result.ok else result.message)
+            new = enrich.store_applicant_publications(db, me.id, result, ui.clock.now())
+        if not result.ok:
+            return _back("publications", result.message)
+        if not result.items:
+            return _back(
+                "publications",
+                notice="PubMed found no papers for that name. Add your name as it appears "
+                'on your papers (e.g. "Shahriari R") above, or your ORCID iD, and try again.',
+            )
+        return _back(
+            "publications",
+            notice=f"Found {len(result.items)} paper(s), {new} new. Mark the ones that are yours.",
+        )
 
     @app.post("/profile/publications/{publication_id}")
     def decide_publication(publication_id: int, decision: str = Form(...)) -> RedirectResponse:

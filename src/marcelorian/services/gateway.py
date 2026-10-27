@@ -36,6 +36,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -77,7 +78,13 @@ from marcelorian.domain.identifiers import new_x_marcelorian_id, opaque_token, r
 from marcelorian.domain.mime import MimeAddressError, build_mime
 from marcelorian.domain.recipients import RecipientError, validate_recipient
 from marcelorian.domain.snapshot import SnapshotContent, SnapshotError, verify_canonical
-from marcelorian.domain.timing import SchedulingError, in_window, load_zone, next_window
+from marcelorian.domain.timing import (
+    SchedulingError,
+    WindowPolicy,
+    in_window,
+    load_zone,
+    next_window,
+)
 from marcelorian.services import (
     approvals,
     budget,
@@ -177,6 +184,52 @@ def conservative_inbound_handler(_campaign: Campaign, _meta: MessageMeta) -> Inb
 
 def _expected_kind(mode: Mode) -> TransportKind:
     return TransportKind.GMAIL if mode.is_real else TransportKind.SANDBOX
+
+
+def relaxed_timing(settings: AppSettings, channel: Channel) -> bool:
+    """Without strict rules, the applicant's own clicks need no send window or spacing.
+
+    Only the Outlook hand-off and practice qualify: the app sends nothing itself there,
+    and the applicant schedules the send in Outlook at the suggested time (owner decision
+    2026-10-27). The Gmail channel, which sends unattended, always keeps the rules.
+    """
+    return not settings.strict_send_rules and channel in (
+        Channel.OUTLOOK_HANDOFF,
+        Channel.SANDBOX,
+    )
+
+
+def _timing_verdict(
+    session: Session,
+    message: Message,
+    mode: Mode,
+    settings: AppSettings,
+    now: datetime,
+    tz: ZoneInfo,
+    policy: WindowPolicy,
+) -> Verdict | None:
+    """The send window, spacing and 24-hour total (strict rules, or the Gmail channel)."""
+    if message.eligible_window_end is None or now >= message.eligible_window_end:
+        return Verdict(Outcome.DEFERRED, DeferralReason.WINDOW_PASSED)
+    if message.eligible_window_start is None or now < message.eligible_window_start:
+        return Verdict(Outcome.DEFERRED, DeferralReason.OUTSIDE_WINDOW)
+    try:
+        permitted = in_window(now, tz, policy)
+    except SchedulingError:
+        return Verdict(Outcome.BLOCKED, "no_permitted_window", invalidate=True)
+    if not permitted:
+        return Verdict(Outcome.DEFERRED, DeferralReason.OUTSIDE_WINDOW)
+    ledger = ledger_for(mode)
+    if not pacing.allows(session, ledger, now):
+        return Verdict(Outcome.DEFERRED, DeferralReason.PACING)
+    limit = (
+        settings.real_submissions_per_24h
+        if ledger is Ledger.REAL
+        else settings.sandbox_submissions_per_24h
+    )
+    if not budget.has_capacity(session, ledger, limit, now):
+        return Verdict(Outcome.DEFERRED, DeferralReason.BUDGET, cap_reason="budget_24h")
+    return None
 
 
 def final_checks(
@@ -294,26 +347,10 @@ def final_checks(
     policy = scheduling.policy_for(snapshot, settings)
     if message.due_at is not None and now < message.due_at:
         return Verdict(Outcome.DEFERRED, DeferralReason.NOT_DUE)
-    if message.eligible_window_end is None or now >= message.eligible_window_end:
-        return Verdict(Outcome.DEFERRED, DeferralReason.WINDOW_PASSED)
-    if message.eligible_window_start is None or now < message.eligible_window_start:
-        return Verdict(Outcome.DEFERRED, DeferralReason.OUTSIDE_WINDOW)
-    try:
-        permitted = in_window(now, tz, policy)
-    except SchedulingError:
-        return Verdict(Outcome.BLOCKED, "no_permitted_window", invalidate=True)
-    if not permitted:
-        return Verdict(Outcome.DEFERRED, DeferralReason.OUTSIDE_WINDOW)
-    ledger = ledger_for(mode)
-    if not pacing.allows(session, ledger, now):
-        return Verdict(Outcome.DEFERRED, DeferralReason.PACING)
-    limit = (
-        settings.real_submissions_per_24h
-        if ledger is Ledger.REAL
-        else settings.sandbox_submissions_per_24h
-    )
-    if not budget.has_capacity(session, ledger, limit, now):
-        return Verdict(Outcome.DEFERRED, DeferralReason.BUDGET, cap_reason="budget_24h")
+    if not relaxed_timing(settings, channel):
+        timing = _timing_verdict(session, message, mode, settings, now, tz, policy)
+        if timing is not None:
+            return timing
     if message.step == 1:
         capacity = reservations.validate_for_dispatch(session, campaign, settings, now)
         if not capacity.ok:

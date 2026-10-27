@@ -63,7 +63,7 @@ def test_queue_shows_the_most_sendable_record_first(client, security) -> None:
     assert 'href="https://synthetic-eye.test/people"' in page
     assert "Confirmed current" in page and "Skip for now" in page
     assert "Dr Synthetic C-FAC1" in client.get("/research").text
-    assert "verification queue (5 to check)" in client.get("/research").text
+    assert "Check leads one by one (5 to check)" in client.get("/research").text
 
 
 def test_confirm_needs_a_source_then_moves_on(client, security, world) -> None:
@@ -235,13 +235,15 @@ def test_dashboard_shows_status_places_and_progress(client, security, world) -> 
     )
     page = client.get("/").text
     assert "Outreach status" in page and "Rejected (no opening)" in page
-    assert "Places in use" in page and "No place in use." in page
+    assert "Your pipeline" in page and "Checked" in page
+    settings_page = client.get("/settings").text
+    assert "One open application per" in settings_page and "Places in use: none" in settings_page
     assert "Verification progress" in page and "Confirmed this week" in page
     response = post(client, "/actions/same-place-scope", csrf, scope="lab")
     assert "scope_error=confirm" in response.headers["location"]
     response = post(client, "/actions/same-place-scope", csrf, scope="lab", confirm="yes")
-    assert response.headers["location"] == "/#places"
-    assert 'value="lab" selected' in client.get("/").text
+    assert response.headers["location"] == "/settings#places"
+    assert 'value="lab" selected' in client.get("/settings").text
     assert post(client, "/actions/same-place-scope", csrf, scope="city").status_code == 400
     assert (
         client.post(

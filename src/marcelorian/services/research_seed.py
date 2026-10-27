@@ -17,6 +17,10 @@ Categories (preview and import):
 * ``conflicting`` -- hash differs and the applicant has already reviewed the record:
   seed-owned fields are replaced, the applicant's decisions are kept, and the record
   is flagged for re-review.
+* ``duplicate``   -- a new id for a person or posting already in the list (from an
+  earlier file or earlier in this one): same address, or the same name at the same
+  institution (postings: also the same application link). Not staged, so a second file never adds
+  the same person twice (owner request 2026-10-27); links to it point to the kept one.
 
 Records staged earlier but absent from this file are reported and kept, never deleted.
 """
@@ -24,6 +28,7 @@ Records staged earlier but absent from this file are reported and kept, never de
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -72,7 +77,7 @@ from marcelorian.domain.seed import dangling_references as _dangling
 from marcelorian.services.audit import audit
 
 SOURCE_REQUIRED = "Say where you checked (a URL or a short note) before confirming."
-CATEGORIES = ("new", "unchanged", "changed", "conflicting", "excluded", "invalid")
+CATEGORIES = ("new", "duplicate", "unchanged", "changed", "conflicting", "excluded", "invalid")
 MAX_LOCAL_TEXT = 2000
 
 #: Seed columns copied to same-named ``research_record`` columns (text, blank = "").
@@ -141,6 +146,8 @@ class SeedPreview:
     absent: list[str] = field(default_factory=list)
     record_types: dict[str, int] = field(default_factory=dict)
     import_id: int | None = None
+    #: Skipped duplicate id -> the external id of the record kept for that person.
+    duplicate_of: dict[str, str] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -180,6 +187,17 @@ def preview(session: Session, parsed: ParsedSeed) -> SeedPreview:
     )
     result.invalid += _dangling(parsed, staged)
     bad = {e.record_id for e in result.invalid}
+    known: dict[str, str] = {}  # identity key -> external id already in the list
+    for staged_record in staged.values():
+        for key in identity_keys(
+            staged_record.record_type,
+            name=staged_record.name,
+            institution_key=staged_record.institution_key,
+            email=staged_record.email,
+            email_is_shared=bool(staged_record.email_is_shared),
+            application_url=_raw_value(staged_record, "application_url"),
+        ):
+            known.setdefault(key, staged_record.external_record_id)
     for record in parsed.records:
         existing = staged.get(record.record_id)
         if existing is not None and existing.record_type != record.record_type:
@@ -187,10 +205,75 @@ def preview(session: Session, parsed: ParsedSeed) -> SeedPreview:
             continue
         if record.record_id in bad:
             continue
-        result.categories[_category(record, existing)].append(record.record_id)
+        category = _category(record, existing)
+        keys = identity_keys(
+            record.record_type,
+            name=record.text("name"),
+            institution_key=record.text("institution_key"),
+            email=record.text("email"),
+            email_is_shared=record.text("email_is_shared").strip().lower() in ("true", "1", "yes"),
+            application_url=record.text("application_url"),
+        )
+        if category == "new":
+            match = next((known[k] for k in keys if k in known), None)
+            if match is not None:
+                result.duplicate_of[record.record_id] = match
+                category = "duplicate"
+        for key in keys:
+            known.setdefault(key, record.record_id)
+        result.categories[category].append(record.record_id)
     in_file = {r.record_id for r in parsed.records}
     result.absent = sorted(set(staged) - in_file)
     return result
+
+
+_TITLES = "dr prof professor md phd mph mbbs do od ms msc jr sr ii iii"
+_PERSON_TITLES = frozenset(_TITLES.split())
+
+
+def _folded_name(name: str) -> str:
+    words = re.sub(r"[^\w\s]", " ", name.casefold()).split()
+    return " ".join(w for w in words if w not in _PERSON_TITLES)
+
+
+def _url_key(url: str) -> str:
+    text = url.strip().casefold()
+    text = re.sub(r"^https?://(www\.)?", "", text)
+    return text.split("#", 1)[0].rstrip("/")
+
+
+def identity_keys(
+    record_type: str,
+    *,
+    name: str,
+    institution_key: str,
+    email: str,
+    email_is_shared: bool,
+    application_url: str,
+) -> set[str]:
+    """Keys that mean "the same person or posting" across files with different ids."""
+    keys: set[str] = set()
+    folded = _folded_name(name)
+    place = institution_key.strip().casefold()
+    address = email.strip().casefold()
+    if record_type == "contact":
+        if address and "@" in address and not email_is_shared:
+            keys.add(f"email:{address}")
+        if folded and place:
+            keys.add(f"person:{folded}|{place}")
+    elif folded and place:
+        # Not the application link alone: programs reuse one portal for every cycle.
+        keys.add(f"posting:{folded}|{place}|{_url_key(application_url)}")
+    return keys
+
+
+def _raw_value(record: ResearchRecord, column: str) -> str:
+    try:
+        raw = json.loads(record.raw_json or "{}")
+    except ValueError:
+        return ""
+    value = raw.get(column, "") if isinstance(raw, dict) else ""
+    return value if isinstance(value, str) else ""
 
 
 def _category(record: SeedRecord, existing: ResearchRecord | None) -> str:
@@ -232,6 +315,8 @@ def import_seed(
     for record in parsed.records:
         existing = staged.get(record.record_id)
         category = category_of[record.record_id]
+        if category == "duplicate":
+            continue  # already in the list under another id
         if existing is None:
             existing = ResearchRecord(
                 external_record_id=record.record_id,
@@ -257,7 +342,7 @@ def import_seed(
         existing.last_import_id = batch.id
         existing.updated_at = now
         session.flush()
-        _replace_children(session, existing, record)
+        _replace_children(session, existing, record, plan.duplicate_of)
     plan.import_id = batch.id
     audit(
         session,
@@ -304,7 +389,12 @@ def _is_restriction(value: str) -> bool:
     return bool(text) and not text.lower().startswith("unknown")
 
 
-def _replace_children(session: Session, target: ResearchRecord, record: SeedRecord) -> None:
+def _replace_children(
+    session: Session,
+    target: ResearchRecord,
+    record: SeedRecord,
+    aliases: dict[str, str] | None = None,
+) -> None:
     for model in (ResearchEvidence, ResearchClaim, ResearchLink):
         session.execute(delete(model).where(model.record_id == target.id))
     for position, item in enumerate(record.json["evidence_json"]):
@@ -332,7 +422,10 @@ def _replace_children(session: Session, target: ResearchRecord, record: SeedReco
     same = record.json["details_json"].get("same_recipient_record_ids") or []
     for target_id in same if isinstance(same, list) else []:
         links[(str(target_id), "same_recipient")] = None
-    for target_id, kind in links:
+    renamed = {((aliases or {}).get(t, t), kind) for t, kind in links}
+    for target_id, kind in sorted(renamed):
+        if target_id == target.external_record_id:
+            continue  # a duplicate that was this record itself
         session.add(ResearchLink(record_id=target.id, target_external_id=target_id, kind=kind))
 
 

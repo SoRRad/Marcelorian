@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from marcelorian.config.settings import load_settings
 from marcelorian.db.models import Campaign, CvVersion, Message, Pi, PositionLink, Setting
 from marcelorian.domain.enums import Actor, FactStatus, MessageState, Mode
 from marcelorian.domain.subjects import expected_subject
@@ -36,11 +37,11 @@ DEFAULT_TEMPLATES: dict[int, str] = {
         "Dear {salutation},\n\n"
         "My name is {full_name}, and I am {current_role_phrase}. {opening_line}\n\n"
         "{personalized_sentence}\n\n"
-        "My background includes {skills_line}. I would be glad to contribute to "
+        "My background includes {skills_line}, and I would be glad to contribute to "
         "{contribution_line}.\n\n"
         "{funding_line}\n\n"
-        "I have attached my CV for your reference. Thank you for your time and "
-        "consideration.\n\n"
+        "I have attached my CV for your review. I would welcome the chance to discuss how "
+        "I could support your group. Thank you for your time and consideration.\n\n"
         "Best regards,\n{signature}"
     ),
     2: (
@@ -238,7 +239,7 @@ def render(
         values["current_role_phrase"] = fact_value(
             "current_role_phrase", "Current role", required=True
         )
-    if "availability" in names or "opening_line" in names:
+    if "availability" in names:  # only custom templates; the defaults name no start date
         start = fact_value("earliest_start", "Earliest start", required=True)
         duration = fact_value("desired_duration", "Desired duration", required=False)
         values["availability"] = (
@@ -246,8 +247,7 @@ def render(
         )
     if "opening_line" in names:
         values["opening_line"] = opening_line(
-            tailoring.confirmed_position(session, pi.id) if step == 1 else None,
-            values["availability"],
+            tailoring.confirmed_position(session, pi.id) if step == 1 else None
         )
     if "funding_line" in names:
         values["funding_line"] = fact_value("funding_line", "Funding line", required=False)
@@ -282,16 +282,19 @@ def render(
     )
 
 
-def opening_line(position: PositionLink | None, availability: str) -> str:
-    """Email 1's request: the confirmed posted position by name, else an expected opening."""
+def opening_line(position: PositionLink | None) -> str:
+    """Email 1's request: the confirmed posted position by name, else an expected opening.
+
+    No start date (owner decision 2026-10-27: the applicant is flexible).
+    """
     if position is not None:
         return (
             f"I am writing regarding the posted opportunity “{position.title}”, and I would "
-            f"be glad to be considered for a start in {availability}."
+            "be glad to be considered for it."
         )
     return (
-        "I am writing to ask whether your group expects an opening for a research fellow or "
-        f"similar position starting {availability}."
+        "I am writing to ask whether your group has, or expects, an opening for a research "
+        "fellow or a similar position."
     )
 
 
@@ -415,6 +418,11 @@ def draft_fields(message: Message) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+#: Checks that block approval even without strict send rules: no usable address, or the
+#: person is on the do-not-contact list.
+BLOCKING_CHECKS = frozenset({"recipient", "dnc"})
+
+
 @dataclass(frozen=True)
 class Check:
     key: str
@@ -533,6 +541,9 @@ def checklist(
                 warn_only=warn,
             )
         )
+    if not load_settings(session).strict_send_rules:
+        # Owner decision 2026-10-27: only these stop an approval; the rest advise.
+        checks = [replace(c, warn_only=c.key not in BLOCKING_CHECKS) for c in checks]
     return checks
 
 

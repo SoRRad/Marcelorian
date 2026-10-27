@@ -128,19 +128,19 @@ def test_confirmed_posting_is_named_in_email_one(world) -> None:
             ("Postdoctoral Fellowship in Retinal Imaging", False)
         ]
     message_id = save(world, camp, GENERIC_LINE)
-    assert "expects an opening" in world.message(message_id).draft_body
+    assert "or expects, an opening" in world.message(message_id).draft_body
     with transaction(world.factory) as s:
         tailoring.confirm_posting(s, pi_id, record_id, now=world.clock.now())
     message_id = save(world, camp, GENERIC_LINE)
     body = world.message(message_id).draft_body
     assert "“Postdoctoral Fellowship in Retinal Imaging”" in body
-    assert "expects an opening" not in body
+    assert "or expects, an opening" not in body
     result = by_key(world, message_id)
     assert result["position_named"].ok
     assert result["tailored"].ok and "posted position" in result["tailored"].detail
     with transaction(world.factory) as s:
         tailoring.withdraw_posting(s, pi_id, record_id, now=world.clock.now())
-    assert "expects an opening" in world.message(save(world, camp, GENERIC_LINE)).draft_body
+    assert "or expects, an opening" in world.message(save(world, camp, GENERIC_LINE)).draft_body
 
 
 def test_custom_template_without_the_position_fails_the_position_check(world) -> None:
@@ -190,11 +190,11 @@ def test_practice_text_names_a_pi_topic(world) -> None:
 def test_opening_line_wording() -> None:
     from types import SimpleNamespace
 
-    assert drafting.opening_line(None, "July 2027").endswith("position starting July 2027.")
-    named = drafting.opening_line(SimpleNamespace(title="Retina Fellowship"), "July 2027")
+    assert drafting.opening_line(None).endswith("a research fellow or a similar position.")
+    named = drafting.opening_line(SimpleNamespace(title="Retina Fellowship"))
     assert named == (
         "I am writing regarding the posted opportunity “Retina Fellowship”, and I would be "
-        "glad to be considered for a start in July 2027."
+        "glad to be considered for it."
     )
 
 

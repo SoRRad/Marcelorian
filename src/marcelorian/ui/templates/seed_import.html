@@ -4,7 +4,8 @@
 <section class="card">
   <h2>Import “{{ name }}”</h2>
   <p>{{ plan.row_count }} rows · snapshot {{ plan.snapshot_dates|join(", ") or "-" }}</p>
-  <ul>{% for label, count in counts.items() %}<li>{{ label.replace("_", " ") }}: {{ count }}</li>{% endfor %}</ul>
+  <ul class="import-counts">{% for label, count in counts.items() %}{% if count %}<li><strong>{{ count }}</strong> {{ label }}</li>{% endif %}{% endfor %}</ul>
+  {% if duplicates %}<p class="near">{{ duplicates }} lead(s) match people or postings you already have (the same email, or the same name at the same institution). They are skipped so nobody is emailed twice.</p>{% endif %}
   {% if plan.unknown_columns %}<p class="note">Extra columns are kept with each lead: {{ plan.unknown_columns|join(", ") }}.</p>{% endif %}
   {% if errors %}
   <p class="alert">This file has rows that are not valid, so it cannot be imported. Nothing was changed.</p>

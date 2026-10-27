@@ -17,7 +17,17 @@ from marcelorian.db.models import Campaign, Institution, Pi, PiEmail, ResearchRe
 from marcelorian.domain.enums import Mode
 from marcelorian.domain.research import is_web_url
 from marcelorian.lookups import bulk, enrich
-from marcelorian.services import candidates, dnc, promotion, reservations, runtime, tailoring
+from marcelorian.services import (
+    candidates,
+    contact_emails,
+    dnc,
+    pipeline,
+    promotion,
+    reservations,
+    runtime,
+    tailoring,
+)
+from marcelorian.services.promotion import EMAIL_SOURCES
 from marcelorian.services.recipients import send_ready_email
 from marcelorian.ui.context import UIContext
 
@@ -130,6 +140,18 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 "dnc": dnc.matches(db, pi.id, Mode.LIVE),
                 "is_web_url": is_web_url,
                 "error": request.query_params.get("error", ""),
+                "notice": request.query_params.get("notice", ""),
+                "email_sources": {k: v[1] for k, v in EMAIL_SOURCES.items()},
+                "card": next(
+                    (
+                        c
+                        for col in pipeline.board(db, view.active_mode, now.date()).columns
+                        for c in col.cards
+                        if c.key == f"pi-{pi.id}"
+                    ),
+                    None,
+                ),
+                "stages": pipeline.STAGES,
             }
         return ui.render(request, "candidate_detail.html", context)
 
@@ -146,22 +168,65 @@ def register(app: FastAPI, ui: UIContext) -> None:
             enrich.store_pi_results(db, pi_id, results, ui.clock.now())
         return RedirectResponse(f"/candidates/{pi_id}#evidence", status_code=303)
 
+    @app.post("/candidates/{pi_id}/emails")
+    def add_email(
+        pi_id: int,
+        address: str = Form(""),
+        source: str = Form(""),
+        source_url: str = Form(""),
+        replace_current: str = Form(""),
+    ) -> RedirectResponse:
+        """Change or add the contact's address (owner request 2026-10-27)."""
+        url = f"/candidates/{pi_id}"
+        with transaction(ui.session_factory) as db:
+            if db.get(Pi, pi_id) is None:
+                raise HTTPException(status_code=404)
+            try:
+                contact_emails.add_address(
+                    db,
+                    pi_id,
+                    address,
+                    source=source,
+                    source_url=source_url,
+                    replace_current=replace_current == "yes",
+                    now=ui.clock.now(),
+                )
+            except (contact_emails.AddressError, ValueError) as exc:
+                return RedirectResponse(
+                    f"{url}?{urlencode({'error': str(exc)[:300]})}#emails", status_code=303
+                )
+        return RedirectResponse(
+            f"{url}?{urlencode({'notice': 'Address saved.'})}#emails", status_code=303
+        )
+
+    @app.post("/candidates/{pi_id}/emails/{email_id}/remove")
+    def remove_email(pi_id: int, email_id: int) -> RedirectResponse:
+        with transaction(ui.session_factory) as db:
+            try:
+                contact_emails.retire(
+                    db, pi_id, email_id, reason="removed by the applicant", now=ui.clock.now()
+                )
+            except contact_emails.AddressError as exc:
+                raise HTTPException(status_code=404) from exc
+        return RedirectResponse(f"/candidates/{pi_id}#emails", status_code=303)
+
     @app.post("/candidates/lookup-all")
-    def lookup_all() -> RedirectResponse:
+    def lookup_all(back: str = Form("")) -> RedirectResponse:
         """Start the background lookup for every contact that needs one."""
         if ui.bulk is None:  # pragma: no cover - always configured by create_app
             raise HTTPException(status_code=503)
         count = ui.bulk.start()
         notice = f"Looking up {count} contacts in the background." if count else "Nothing to do."
+        page = "/" if back == "home" else "/candidates"
         return RedirectResponse(
-            f"/candidates?{urlencode({'notice': notice})}#lookup-all", status_code=303
+            f"{page}?{urlencode({'notice': notice})}#lookup-all", status_code=303
         )
 
     @app.post("/candidates/lookup-all/stop")
-    def lookup_all_stop() -> RedirectResponse:
+    def lookup_all_stop(back: str = Form("")) -> RedirectResponse:
         if ui.bulk is not None:
             ui.bulk.stop()
-        return RedirectResponse("/candidates#lookup-all", status_code=303)
+        return RedirectResponse(f"{'/' if back == 'home' else '/candidates'}#lookup-all", 303)
 
     @app.post("/candidates/{pi_id}/postings/{record_id}")
     def candidate_posting(pi_id: int, record_id: int, action: str = Form("")) -> RedirectResponse:

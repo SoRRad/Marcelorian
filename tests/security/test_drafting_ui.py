@@ -43,7 +43,7 @@ def test_draft_review_approve_flow(client, security, world) -> None:
     confirm_facts(world)
     _pi, campaign_id = start(client, csrf, world)
     page = client.get(f"/campaigns/{campaign_id}/draft").text
-    assert "Email 1 to Pat Example" in page and "Fill empty lines with practice text" in page
+    assert "Email 1 to Pat Example" in page and "Approve ✓" in page
     response = post(client, f"/campaigns/{campaign_id}/draft", csrf, action="save", **PERSONAL)
     message_url = response.headers["location"]
     review = client.get(message_url).text
@@ -82,3 +82,51 @@ def test_drafting_routes_need_csrf_and_real_ids(client, security, world) -> None
     assert post(client, "/candidates/999/draft", csrf).status_code == 404
     assert client.get("/messages/999").status_code == 404
     assert client.get("/campaigns/999/draft").status_code == 404
+
+
+def test_lines_are_prefilled_and_approve_works_from_the_draft_page(client, security, world) -> None:
+    from tests.service.test_drafting import add_evidence
+
+    csrf = sign_in(client, security)
+    confirm_facts(world)
+    world.settings(strict_send_rules=False)
+    _pi, campaign_id = start(client, csrf, world)
+    add_evidence(world, campaign_id, "Synthetic choroid imaging in glaucoma progression")
+    page = client.get(f"/campaigns/{campaign_id}/draft").text
+    assert "I read your recent paper, “Synthetic choroid imaging in glaucoma progression”" in page
+    assert "Other suggestions" in page or "data-fill" not in page
+    assert 'name="body"' in page and "data-edited" in page
+    form = {
+        "personalized_sentence": "Your glaucoma progression work fits my training.",
+        "skills_line": "OCT image analysis",
+        "contribution_line": "your imaging projects",
+        "edit_body": "no",
+    }
+    response = post(client, f"/campaigns/{campaign_id}/draft", csrf, action="approve", **form)
+    assert response.headers["location"].endswith("?notice=approved#send"), response.headers
+    message_id = int(response.headers["location"].split("/")[2].split("?")[0])
+    assert world.message(message_id).state == "approved_queued"
+
+
+def test_an_edited_email_box_is_kept_word_for_word(client, security, world) -> None:
+    csrf = sign_in(client, security)
+    confirm_facts(world)
+    _pi, campaign_id = start(client, csrf, world)
+    text = "Dear Dr. Example,\n\nMy own words, written in the preview box.\n\nBest regards,\nAlex"
+    response = post(
+        client,
+        f"/campaigns/{campaign_id}/draft",
+        csrf,
+        action="save_here",
+        body=text,
+        edit_body="yes",
+        **PERSONAL,
+    )
+    assert "Draft+saved" in response.headers["location"]
+    with transaction(world.factory) as s:
+        message = s.query(Message).filter_by(campaign_id=campaign_id).one()
+        assert message.draft_body == text + "\n"
+    assert (
+        "My own words, written in the preview box."
+        in client.get(f"/campaigns/{campaign_id}/draft").text
+    )

@@ -1,35 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card">
+{% include "_settings_nav.html" %}
+<section class="card hero-card">
   <h2>Your profile</h2>
-  <p class="note">Only <strong>confirmed</strong> answers can appear in an email. "Save draft" keeps an answer without confirming it. Changing a confirmed answer withdraws approvals of unsent emails that used it.</p>
+  <p class="note">Fill in what applies, then press <strong>Save and confirm all</strong> once. Only confirmed answers appear in emails. Changing a confirmed answer withdraws approvals of unsent emails that used it.</p>
   {% if error %}<p class="alert">{{ error }}</p>{% endif %}
-  {% if missing %}<p class="warn-text">Still needed before drafting: {{ missing|join(", ") }}.</p>{% else %}<p>All required answers are confirmed.</p>{% endif %}
+  {% if notice %}<p class="near">{{ notice }}</p>{% endif %}
+  {% if missing %}<p class="warn-text">Still needed before drafting: {{ missing|join(", ") }}.</p>{% else %}<p class="near">All required answers are confirmed.</p>{% endif %}
 </section>
-{% for field in fields %}
-{% set fact = facts.get(field.key) %}
-<section class="card profile-field" id="f-{{ field.key }}">
-  <form method="post" action="/profile/fact" class="review">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="key" value="{{ field.key }}">
+<form method="post" action="/profile/facts" class="card review profile-all" id="profile-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% for field in fields %}
+  {% set fact = facts.get(field.key) %}
+  <div class="profile-field" id="f-{{ field.key }}">
     <label>{{ field.label }}{% if field.required %} *{% endif %}
       {% if field.kind == 'choice' %}
-      <select name="value"><option value="">— choose —</option>{% for value, label in field.choices.items() %}<option value="{{ value }}" {% if fact and fact.value == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+      <select name="v_{{ field.key }}"><option value="">— choose —</option>{% for value, label in field.choices.items() %}<option value="{{ value }}" {% if fact and fact.value == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
       {% elif field.kind == 'long' %}
-      <textarea name="value" rows="3" maxlength="2000">{{ fact.value if fact else '' }}</textarea>
+      <textarea name="v_{{ field.key }}" rows="2" maxlength="2000">{{ fact.value if fact else '' }}</textarea>
       {% else %}
-      <input type="text" name="value" maxlength="2000" value="{{ fact.value if fact else '' }}" {% if field.kind == 'month' %}placeholder="2027-07"{% endif %}>
+      <input type="text" name="v_{{ field.key }}" maxlength="2000" value="{{ fact.value if fact else '' }}" {% if field.kind == 'month' %}placeholder="2027-07"{% endif %}>
       {% endif %}
     </label>
-    {% if field.help %}<span class="note">{{ field.help }}</span>{% endif %}
-    <div class="quick-buttons">
-      <button type="submit" name="action" value="confirm" class="primary">Save and confirm</button>
-      <button type="submit" name="action" value="draft">Save draft</button>
-      {% if fact %}<span class="note">{{ "Confirmed" if fact.status == "confirmed" else "Draft (not confirmed)" }} · version {{ fact.version }}{% if fact.provenance != 'applicant_entered' %} · {{ fact.provenance }}{% endif %}</span>{% endif %}
-    </div>
-  </form>
-</section>
-{% endfor %}
+    <span class="note">{% if field.help %}{{ field.help }} {% endif %}{% if fact %}{{ "✓ confirmed" if fact.status == "confirmed" else "draft, not confirmed" }}{% endif %}</span>
+  </div>
+  {% endfor %}
+  <div class="quick-buttons sticky-actions"><button type="submit" class="primary">Save and confirm all</button></div>
+</form>
 
 <section class="card" id="cv">
   <h2>CV</h2>

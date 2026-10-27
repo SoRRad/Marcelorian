@@ -1,0 +1,6 @@
+{% set path = request.url.path if request else "" %}
+<nav class="subnav" aria-label="Settings sections">
+  <a href="/profile" class="{{ 'current' if path.startswith('/profile') else '' }}">Your profile</a>
+  <a href="/settings" class="{{ 'current' if path == '/settings' else '' }}">Sending and templates</a>
+  <a href="/data" class="{{ 'current' if path.startswith('/data') else '' }}">Your data</a>
+</nav>

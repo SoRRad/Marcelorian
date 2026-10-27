@@ -1,16 +1,41 @@
 {% extends "base.html" %}
 {% block content %}
-<p><a href="/candidates">&larr; Candidates</a></p>
-<section class="card">
+<p class="crumbs"><a href="/">&larr; Home</a> · <a href="/candidates">All contacts</a></p>
+<section class="card hero-card">
   <h2>{{ pi.full_name }}</h2>
+  {% if card %}
+  <div class="steps" aria-label="Progress">{% for key, label in stages %}<span class="{{ 'done' if loop.index < card.step else ('now' if loop.index == card.step else '') }}">{{ label }}</span>{% endfor %}</div>
+  <p><a class="button primary" href="{{ card.url }}">Next: {{ card.action }} →</a>{% if card.detail %} <span class="note">{{ card.detail }}</span>{% endif %}</p>
+  {% endif %}
   <p>{{ institution.name }}{% if institution.city or institution.state %} — {{ institution.city or "" }} {{ institution.state or "" }}{% endif %}{% if pi.department %} · {{ pi.department }}{% endif %}</p>
   <p>Salutation: {{ pi.salutation }} {% if pi.salutation_reviewed %}<span class="badge">reviewed</span>{% endif %} · Time zone: {{ institution.iana_tz or "not set" }} {% if institution.tz_verified %}<span class="badge">verified</span>{% endif %}</p>
   <p>Current role: {{ "verified" if pi.current_role_verified else "not verified" }}{% if pi.current_role_evidence %} <span class="note">— {{ pi.current_role_evidence }}</span>{% endif %}</p>
-  <ul>{% for e in emails %}<li>{{ e.address }} — confidence {{ e.confidence }}{% if e.ownership_verified %}, ownership verified{% endif %}{% if e.invalid %}, <span class="warn-text">invalid</span>{% endif %}{% if ready and ready.id == e.id %} <span class="badge">send-ready</span>{% endif %}{% if e.verification_evidence %}<br><span class="note">{{ e.verification_evidence }}</span>{% endif %}</li>{% endfor %}</ul>
   {% if dnc %}<p class="alert">On your do-not-contact list.</p>{% endif %}
   {% if busy %}<p class="warn-text">Place in use: {% for c in busy %}campaign #{{ c.id }} ({{ c.state }}){% if not loop.last %}, {% endif %}{% endfor %}. A new application here waits until that place frees.</p>{% endif %}
   {% if campaigns %}<p>{% for c in campaigns %}<a href="/campaigns/{{ c.id }}">Campaign ({{ c.mode }}): {{ c.state.replace("_", " ") }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
-  {% if ready and not dnc %}<form method="post" action="/candidates/{{ pi.id }}/draft" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary">Draft an email</button></form>{% elif not ready %}<p class="warn-text">No send-ready address: drafting needs one.</p>{% endif %}
+  {% if ready and not dnc %}<form method="post" action="/candidates/{{ pi.id }}/draft" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary">Draft an email</button></form>{% elif not ready %}<p class="warn-text">No usable address yet: add one below to draft.</p>{% endif %}
+</section>
+
+<section class="card" id="emails">
+  <h2>Email addresses</h2>
+  {% if error %}<p class="alert">{{ error }}</p>{% endif %}
+  {% if notice %}<p class="near">{{ notice }}</p>{% endif %}
+  <ul class="address-list">{% for e in emails %}<li><strong>{{ e.address }}</strong>
+    {% if ready and ready.id == e.id %}<span class="badge good">used for emails</span>{% elif e.invalid %}<span class="badge warn">{{ e.invalid_reason or "not used" }}</span>{% else %}<span class="badge">confidence {{ e.confidence }}{{ ", checked" if e.ownership_verified else "" }}</span>{% endif %}
+    {% if not e.invalid %}<form method="post" action="/candidates/{{ pi.id }}/emails/{{ e.id }}/remove" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Remove</button></form>{% endif %}
+    {% if e.verification_evidence %}<br><span class="note">{{ e.verification_evidence }}</span>{% endif %}</li>
+  {% else %}<li class="note">No address yet.</li>{% endfor %}</ul>
+  <details{% if not ready %} open{% endif %}><summary>Change or add an address</summary>
+  <form method="post" action="/candidates/{{ pi.id }}/emails" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Email address <input type="email" name="address" maxlength="320" required></label>
+    <label>Where is it published? <select name="source">{% for key, label in email_sources.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}</select></label>
+    <label>Page where you found it <input type="url" name="source_url" maxlength="2000" placeholder="https://" required></label>
+    <label class="check"><input type="checkbox" name="replace_current" value="yes" {% if ready %}checked{% endif %}> Use it instead of the current address</label>
+    <button type="submit" class="primary">Save address</button>
+  </form>
+  <p class="note">Changing the address means an approved, unsent email needs approving again. An address already used by another contact is refused, so nobody gets two emails.</p>
+  </details>
 </section>
 
 <section class="card" id="assessment">

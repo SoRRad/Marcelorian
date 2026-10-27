@@ -40,7 +40,7 @@ def test_list_and_detail(client, security, world) -> None:
     page = client.get("/candidates").text
     assert "Alex Example" in page and "Research fit not assessed" in page
     detail = client.get(f"/candidates/{pi}").text
-    assert "send-ready" in detail and "Look up PubMed" in detail
+    assert "used for emails" in detail and "Look up PubMed" in detail
     assert client.get("/candidates/999").status_code == 404
 
 

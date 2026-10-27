@@ -1,8 +1,18 @@
 {% if send %}
+{% if send.suggested %}
+<p class="suggested">🕘 <strong>Suggested send time:</strong>
+  {% if send.send_now %}now: it's within the lab's working hours{% else %}{{ send.suggested_local.strftime("%a %d %b, %H:%M") if send.suggested_local else send.suggested.strftime("%Y-%m-%d %H:%M UTC") }} at the PI's location ({{ send.pi_zone }}){% endif %}
+  <span class="note">· your time: <time datetime="{{ send.suggested.isoformat() }}" data-local></time></span></p>
+{% if not send.strict and not send.send_now %}<p class="note">No need to wait: open it now and use <strong>Schedule send</strong> (the arrow next to Send) in Outlook for that time.</p>{% endif %}
+{% endif %}
 {% if send.practice %}
-  <p class="note">Practice mode: the email goes to the practice mailbox, never to the PI. The same send-time rules apply.</p>
+  <p class="note">Practice mode: nothing reaches the PI.</p>
   {% if send.ready %}
-  <form method="post" action="/messages/{{ message.id }}/practice-send"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary">Send (practice)</button></form>
+  <div class="quick-buttons">
+    <form method="post" action="/messages/{{ message.id }}/practice-send"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary">Send (practice)</button></form>
+    <a class="button" href="/messages/{{ message.id }}/try-outlook">Try it in Outlook (sent to you)</a>
+  </div>
+  <p class="note">"Try it in Outlook" opens the real Outlook link, copy text and email file addressed to {{ send.own_address or "your own Outlook address (add it in Settings)" }}. "Send (practice)" records it as sent so you can practise follow-ups and replies.</p>
   {% else %}
   <p class="warn-text">Not yet: {{ send.reason }}</p>
   {% if send.unlock_at %}<p>Unlocks at {{ send.unlock_at.strftime("%Y-%m-%d %H:%M") }} UTC{% if send.unlock_local %} ({{ send.unlock_local.strftime("%a %H:%M") }} at the PI's location){% endif %}.</p>

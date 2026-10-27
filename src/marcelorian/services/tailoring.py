@@ -99,6 +99,38 @@ class Posting:
     confirmed: bool
 
 
+_PHD = re.compile(
+    r"\bph\.?\s?d\.?\b[^.;]{0,40}\b(student|studentship|position|program|programme|"
+    r"candidate|applicant|opening|admission)s?\b"
+    r"|\b(doctoral|graduate)\s+(student|studentship|program|programme|candidate)s?\b"
+    r"|\bphd\b\s*$",
+    re.IGNORECASE,
+)
+
+
+_NOT_PHD = re.compile(
+    r"post-?doc|fellow|faculty|research associate|scientist|required|preferred", re.IGNORECASE
+)
+
+
+def is_phd_posting(*texts: str) -> bool:
+    """A posting that recruits PhD (doctoral) students, which the applicant does not want
+    (owner request 2026-10-27). A postdoc, fellowship or "PhD required" role is not one."""
+    joined = " ".join(t or "" for t in texts)
+    if _NOT_PHD.search(joined):
+        return False
+    return any(_PHD.search(t or "") for t in texts)
+
+
+def record_is_phd_posting(record: ResearchRecord) -> bool:
+    if record.record_type != "opportunity":
+        return False
+    raw = _raw(record)
+    details = _json_object(raw.get("details_json"))
+    # The title and program type describe the position; the role is its contact person's.
+    return is_phd_posting(record.name, str(details.get("program_type", "")))
+
+
 def _contact_records(session: Session, pi_id: int) -> list[ResearchRecord]:
     return list(
         session.scalars(
@@ -136,6 +168,8 @@ def linked_postings(session: Session, pi_id: int) -> list[Posting]:
         .where(ResearchRecord.id.in_(opportunity_ids), ResearchRecord.record_type == "opportunity")
         .order_by(ResearchRecord.name)
     ):
+        if record_is_phd_posting(record):
+            continue  # PhD-student positions are never offered (owner, 2026-10-27)
         raw = _raw(record)
         details = _json_object(raw.get("details_json"))
         postings.append(

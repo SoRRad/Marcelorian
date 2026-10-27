@@ -273,15 +273,47 @@ def last_runs(session: Session, pi_id: int | None) -> dict[str, LookupRun]:
 # --------------------------------------------------------------------------- #
 
 
-def gather_applicant_publications(
-    full_name: str, orcid: str, fetcher: Fetcher, keys: Keys = NO_KEYS
-) -> SourceResult:
-    names = full_name.split()
+#: Titles and degrees people often type with their name; never part of a PubMed name.
+_EXTRAS = """
+    dr dr. prof prof. md mbbs mbchb do od phd mph ms msc mba ma bs bsc mrcs frcs frcsc
+    facs feba jr jr. sr sr. ii iii iv
+"""
+_NAME_EXTRAS = frozenset(_EXTRAS.split())
+
+
+def applicant_term(full_name: str, orcid: str = "", pubmed_name: str = "") -> str:
+    """A PubMed term that finds the applicant's papers however they were indexed.
+
+    ORCID alone misses every paper whose record carries no ORCID, and the full-name
+    search misses papers indexed with initials only, so the terms are combined with OR:
+    ORCID, "Last, First Middle"[fau], "Last FM"[au], and the name exactly as it appears
+    on the applicant's papers when given. The applicant then confirms which are theirs.
+    """
+    parts: list[str] = []
     if orcid:
-        term = sources.pubmed_term(orcid=orcid)
-    elif len(names) >= 2:
-        term = f'"{names[-1]}, {" ".join(names[:-1])}"[fau]'
-    else:
+        parts.append(f"{orcid}[auid]")
+    words = [
+        w
+        for w in full_name.replace(",", " ").split()
+        if w.casefold() not in _NAME_EXTRAS and any(c.isalpha() for c in w)
+    ]
+    if len(words) >= 2:
+        last, given = words[-1], words[:-1]
+        initials = "".join(w[0] for w in given if w[0].isalpha()).upper()
+        parts.append(f'"{last}, {" ".join(given)}"[fau]')
+        parts.append(f'"{last} {initials}"[au]')
+    clean = " ".join(pubmed_name.replace('"', " ").split())
+    if clean:
+        parts.append(f'"{clean}"[au]')
+    unique = list(dict.fromkeys(parts))
+    return " OR ".join(f"({p})" for p in unique) if len(unique) > 1 else "".join(unique)
+
+
+def gather_applicant_publications(
+    full_name: str, orcid: str, fetcher: Fetcher, keys: Keys = NO_KEYS, pubmed_name: str = ""
+) -> SourceResult:
+    term = applicant_term(full_name, orcid, pubmed_name)
+    if not term:
         return SourceResult("pubmed", False, [], "Enter your full name or ORCID iD first.")
     return _run("pubmed", lambda: sources.pubmed_search(fetcher, term, keys.ncbi, keys.ncbi_email))
 

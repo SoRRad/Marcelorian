@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/messages/{{ message.id }}#send">&larr; Email {{ message.step }} to {{ pi.full_name }}</a></p>
+<section class="card hero-card">
+  <h2>Try it in Outlook <span class="badge">practice</span></h2>
+  <p>This is the real hand-off, but addressed to <strong>you</strong> ({{ package.to }}), so you can see exactly what the PI would get. Nothing is recorded and nothing reaches the PI.</p>
+  <div class="quick-buttons">
+    {% if package.compose_url %}<a class="button primary" href="{{ package.compose_url }}" target="_blank" rel="noopener noreferrer">Open in Outlook on the web</a>{% else %}<span class="warn-text">Too long for a link: use Copy or the email file.</span>{% endif %}
+    <button type="button" data-copy-button>Copy the text</button>
+    <a class="button" href="/messages/{{ message.id }}/try-outlook/email.eml">Email file (classic Outlook)</a>
+  </div>
+  {% if package.link_omits_attachments %}<p class="note">The link can't carry your CV: attach it in Outlook. The email file includes it.</p>{% endif %}
+  <p>To: <strong>{{ package.to }}</strong> · Subject: <strong>{{ package.subject }}</strong></p>
+  <textarea class="copy-text" rows="14" readonly data-copy>{{ package.body }}</textarea>
+  <p class="note">When you're happy, go back and use <strong>Send (practice)</strong> to record it and see the follow-ups.</p>
+</section>
+{% endblock %}

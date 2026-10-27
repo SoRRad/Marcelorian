@@ -45,7 +45,8 @@ def test_practice_send_simulated_reply_and_rejection(client, security, world) ->
     csrf = sign_in(client, security)
     campaign_id, message_id = approved_message(client, csrf, world)
     page = client.get(f"/messages/{message_id}").text
-    assert "Send (practice)" in page and "practice mailbox" in page
+    assert "Send (practice)" in page and "nothing reaches the PI" in page
+    assert "Try it in Outlook (sent to you)" in page and "Suggested send time" in page
     response = post(client, f"/messages/{message_id}/practice-send", csrf)
     assert response.headers["location"].endswith("notice=sent")
     assert world.message(message_id).state == "sent"
