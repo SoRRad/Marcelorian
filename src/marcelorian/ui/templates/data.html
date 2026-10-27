@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<p><a href="/settings">&larr; Settings</a></p>
+{% include "_settings_nav.html" %}
 {% if error %}<p class="alert">{{ error }}</p>{% endif %}
 {% if notice %}<p class="near">{{ notice }}</p>{% endif %}
 {% if not paths %}

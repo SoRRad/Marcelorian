@@ -69,7 +69,7 @@ def test_research_requires_a_session(client) -> None:
 def test_list_and_filters(client, security) -> None:
     sign_in(client, security)
     page = client.get("/research")
-    assert page.status_code == 200 and "research leads, not recipients" in page.text
+    assert page.status_code == 200 and "Leads are only suggestions" in page.text
     assert "Dr Synthetic C-FAC1" in page.text and "shared route" in page.text
     filtered = client.get("/research", params={"record_type": "opportunity"})
     assert "Synthetic Retina Research Fellowship" in filtered.text

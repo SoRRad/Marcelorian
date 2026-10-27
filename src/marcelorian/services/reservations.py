@@ -76,6 +76,8 @@ class CapacityResult:
     ok: bool
     reasons: tuple[str, ...] = ()
     counts: dict[str, int] = field(default_factory=dict)
+    #: Limits that only warn because strict send rules are off.
+    warnings: tuple[str, ...] = ()
 
 
 def institution_ids_in_group(session: Session, institution_id: int) -> list[int]:
@@ -264,18 +266,25 @@ def evaluate_initial(
     pending_lab = count_pending_lab(session, mode, pi.lab_group_id, now, campaign.id) + 1
     contacts = count_new_contacts(session, mode, inst_ids, now, campaign.id) + 1
     reasons: list[str] = []
+    warnings: list[str] = []
+    # Without strict rules only the same lab blocks; institution-wide limits warn.
+    wide = reasons if settings.strict_send_rules else warnings
     if pending_inst > settings.pending_per_institution:
-        reasons.append("institution_pending_full")
+        wide.append("institution_pending_full")
     if pending_lab > settings.pending_per_lab:
         reasons.append("lab_pending_full")
     if contacts > settings.new_contacts_per_institution_30d:
-        reasons.append("new_contacts_30d_full")
+        wide.append("new_contacts_30d_full")
     busy = same_place_conflicts(session, campaign, settings.same_place_scope, now)
-    if busy:
+    if busy and not settings.strict_send_rules:
+        same_lab = same_place_conflicts(session, campaign, "lab", now)
+        (reasons if same_lab else warnings).append("same_place_active")
+    elif busy:
         reasons.append("same_place_active")
     return CapacityResult(
         ok=not reasons,
         reasons=tuple(reasons),
+        warnings=tuple(warnings),
         counts={
             "institution_pending": pending_inst,
             "lab_pending": pending_lab,

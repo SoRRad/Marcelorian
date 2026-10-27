@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-<p><a href="/campaigns/{{ campaign.id }}">&larr; Campaign with {{ pi.full_name }}</a> · <a href="/approvals">Approvals</a></p>
+<p><a href="/campaigns/{{ campaign.id }}">&larr; Campaign with {{ pi.full_name }}</a> · <a href="/approvals">All emails</a></p>
 <section class="card">
   <h2>Email {{ message.step }} to {{ pi.full_name }}</h2>
   <p class="note">{{ institution.name }} · {{ message.mode }} mode · {{ message.state.replace("_", " ") }}</p>
   {% if error %}<p class="alert">{{ error }}</p>{% endif %}
-  {% if notice == "sent" %}<p class="near">Recorded as sent.</p>{% elif notice == "not_sent" %}<p class="near">Recorded as not sent. Approve again when you want to send it.</p>{% elif notice == "approved" %}<p class="near">Approved. Approval never sends: open it in Outlook when the send button unlocks.</p>{% elif notice == "revoked" %}<p class="near">Approval revoked. Edit and approve again when ready.</p>{% endif %}
+  {% if notice == "sent" %}<p class="near">Recorded as sent.</p>{% elif notice == "not_sent" %}<p class="near">Recorded as not sent. Approve again when you want to send it.</p>{% elif notice == "approved" %}<p class="near">Approved. Approval never sends anything: use the send options below.</p>{% elif notice == "revoked" %}<p class="near">Approval revoked. Edit and approve again when ready.</p>{% endif %}
   <p>Subject: <strong>{{ message.draft_subject }}</strong></p>
   <pre class="email-preview">{{ message.draft_body }}</pre>
   {% if fields.get("body_edited") %}<p class="note">You edited the whole text.</p>{% endif %}
@@ -32,7 +32,7 @@
   <p class="note">These checks confirm structure and sources, not truth. Your review is the final factual check: read the email as the PI will.</p>
   <div class="quick-buttons">
     <form method="post" action="/messages/{{ message.id }}/approve"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="primary" {% if not can_approve %}disabled{% endif %}>Approve</button></form>
-    <a class="button" href="/campaigns/{{ campaign.id }}/draft">Edit draft</a>
+    <a class="button" href="/campaigns/{{ campaign.id }}/draft">Edit the email</a>
   </div>
 </section>
 {% endif %}

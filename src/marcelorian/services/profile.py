@@ -50,6 +50,11 @@ FIELDS: tuple[Field, ...] = (
         "Defaults to your full name; never shortened automatically.",
     ),
     Field("orcid", "Your ORCID iD (optional)", "Used to import your publications.", "orcid"),
+    Field(
+        "pubmed_name",
+        "Your name as on your papers (optional)",
+        'As PubMed lists it, e.g. "Shahriari R". Helps find your publications.',
+    ),
     Field("degrees", "Degree(s)", "For example MD, MPH."),
     Field("medical_school", "Medical school"),
     Field("graduation_year", "Graduation year"),
@@ -64,7 +69,10 @@ FIELDS: tuple[Field, ...] = (
     ),
     Field("visa_status", "Visa status or need", "Shown factually, never interpreted.", "long"),
     Field(
-        "earliest_start", "Earliest start (YYYY-MM)", "Used as Month YYYY.", "month", required=True
+        "earliest_start",
+        "Earliest start (YYYY-MM, optional)",
+        "Not mentioned in the default emails; only a custom template with {availability} uses it.",
+        "month",
     ),
     Field("desired_duration", "Desired duration", "Included only when confirmed."),
     Field("preferred_states", "Preferred US states (optional)"),

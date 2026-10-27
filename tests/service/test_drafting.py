@@ -100,7 +100,8 @@ def test_email1_is_filled_from_confirmed_facts(world) -> None:
         "My name is Alex Synthetic, and I am a research fellow at the Synthetic Eye Institute."
         in body
     )
-    assert "starting July 2027." in body and " for " not in body.split("starting")[1].split(".")[0]
+    assert "July 2027" not in body and "starting" not in body  # no start date (2026-10-27)
+    assert "has, or expects, an opening for a research fellow" in body
     assert "Your work on synthetic OCT biomarkers caught my attention." in body
     assert body.rstrip().endswith("Best regards,\nAlex Synthetic")
     assert "{" not in body and "\n\n\n" not in body  # empty funding line removed
@@ -116,14 +117,26 @@ def test_duration_and_funding_line_only_when_confirmed(world) -> None:
         body = drafting.render(
             s, s.get(Campaign, camp), 1, PERSONAL, specialty_display_name=SPECIALTY
         ).body
-    assert "starting July 2027." in body  # the unconfirmed duration is left out
     assert "I have support for my first year." in body
+    with transaction(world.factory) as s:  # a custom template may still name availability
+        drafting.set_template(
+            s,
+            1,
+            drafting.DEFAULT_TEMPLATES[1].replace(
+                "{opening_line}", "I could start in {availability}."
+            ),
+            now=world.clock.now(),
+        )
+        body = drafting.render(
+            s, s.get(Campaign, camp), 1, PERSONAL, specialty_display_name=SPECIALTY
+        ).body
+    assert "I could start in July 2027." in body  # the unconfirmed duration is left out
     confirm_facts(world, {"desired_duration": "one year"})
     with transaction(world.factory) as s:
         body = drafting.render(
             s, s.get(Campaign, camp), 1, PERSONAL, specialty_display_name=SPECIALTY
         ).body
-    assert "starting July 2027 for one year." in body
+    assert "I could start in July 2027 for one year." in body
 
 
 def test_unconfirmed_facts_block_the_checklist_and_approval(world) -> None:

@@ -131,3 +131,55 @@
   refresh();
   window.setInterval(refresh, 60000);
 })();
+
+// Times shown in the applicant's own time zone (the server knows only the PI's).
+(function () {
+  "use strict";
+  document.querySelectorAll("time[data-local]").forEach(function (el) {
+    var when = new Date(el.getAttribute("datetime"));
+    if (!isNaN(when.getTime())) {
+      el.textContent = when.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    }
+  });
+})();
+
+// Draft page: picking a suggestion fills its line, and every line change is mirrored
+// into the email box (the preview you edit). Typing in the email box marks it edited,
+// so the server keeps your text exactly as written.
+(function () {
+  "use strict";
+  var form = document.querySelector("form[data-draft]");
+  if (!form) {
+    return;
+  }
+  var body = form.querySelector("[data-body]");
+  var edited = form.querySelector("[data-edited]");
+  var squash = function (text) { return text.replace(/\s+/g, " ").trim(); };
+  form.querySelectorAll("textarea[data-line]").forEach(function (line) {
+    var previous = squash(line.value);
+    var sync = function () {
+      var next = squash(line.value);
+      if (body && previous && next !== previous && body.value.indexOf(previous) !== -1) {
+        body.value = body.value.replace(previous, next);
+      } else if (body && next !== previous && edited && edited.value !== "yes") {
+        // The line is not in the box yet (it was empty): the server re-renders on save.
+        body.classList.add("stale");
+      }
+      previous = next;
+    };
+    line.addEventListener("input", sync);
+    var picker = form.querySelector('select[data-fill="' + line.getAttribute("data-line") + '"]');
+    if (picker) {
+      picker.addEventListener("change", function () {
+        if (picker.value) {
+          line.value = picker.value;
+          sync();
+          picker.selectedIndex = 0;
+        }
+      });
+    }
+  });
+  if (body && edited) {
+    body.addEventListener("input", function () { edited.value = "yes"; body.classList.remove("stale"); });
+  }
+})();

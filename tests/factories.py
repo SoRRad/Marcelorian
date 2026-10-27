@@ -86,6 +86,9 @@ class World:
                 now=now,
             )
             self.cv_id = cv.id
+        # The safety tests exercise the strict rules (send window, spacing, 24-hour total,
+        # institution limits); tests of the relaxed default turn this off themselves.
+        self.settings(strict_send_rules=True)
 
     def rebuild_gateway(self, seed: int = 7) -> None:
         self.gateway = SendGateway(

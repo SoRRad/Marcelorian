@@ -9,18 +9,23 @@ from urllib.parse import urlencode
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from marcelorian.config.settings import load_settings
+from marcelorian.config.settings import load_settings, update_settings
 from marcelorian.db.engine import transaction
 from marcelorian.db.models import Message
 from marcelorian.domain.enums import Actor, Mode
 from marcelorian.lookups import keys as lookup_keys
 from marcelorian.platform.secrets import SecretStoreUnavailable
-from marcelorian.services import ai, drafting, handoff, practice, runtime
+from marcelorian.services import drafting, handoff, practice, runtime, status
 from marcelorian.services.profile import FIELD_BY_KEY
 from marcelorian.services.runtime import ModeSwitchError
 from marcelorian.ui.context import UIContext
 
 ADVANCE = {"hour": timedelta(hours=1), "day": timedelta(days=1), "week": timedelta(days=7)}
+SCOPE_LABELS = {
+    "institution": "Institution (or institution group)",
+    "department": "Department within an institution",
+    "lab": "Lab",
+}
 MODES = {
     Mode.SANDBOX.value: "Practice (sandbox): nothing reaches a real PI",
     Mode.LIVE.value: "Live: real emails, sent by you from Outlook",
@@ -56,13 +61,14 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 "practice_offset": ui.campaign_clock.offset,
                 "templates": {step: drafting.template(db, step) for step in (1, 2, 3, 4)},
                 "settings": load_settings(db),
-                "ai_on": ai.key_saved(db),
+                "places": status.outreach_status(
+                    db, view.active_mode, load_settings(db).same_place_scope, now
+                ).places,
+                "scope_labels": SCOPE_LABELS,
+                "scope_error": request.query_params.get("scope_error", ""),
                 "lookup_keys": lookup_keys.saved(db),
                 "lookup_labels": lookup_keys.LABELS,
                 "ncbi_email": lookup_keys.contact_email(db),
-                "ai_usage": ai.usage(db),
-                "ai_model": ai.MODEL,
-                "ai_shared": [drafting_label(k) for k in ai.SHARED_FACTS],
                 "error": request.query_params.get("error", ""),
                 "notice": request.query_params.get("notice", ""),
             }
@@ -138,31 +144,20 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 return _back(f"t{step}", error=f"Email {step}: {exc}")
         return _back(f"t{step}", notice=f"Email {step} template saved.")
 
-    @app.post("/settings/ai-key")
-    def save_ai_key(api_key: str = Form("")) -> RedirectResponse:
-        try:  # credential store and one free key check: outside any database transaction
-            ai.check_and_store_key(ui.secrets(), ui.ai_client, api_key)
-        except SecretStoreUnavailable:
-            return _back(
-                "ai", error="The Windows Credential Manager is unavailable on this computer."
-            )
-        except ai.AIError as exc:
-            return _back("ai", error=str(exc))
+    @app.post("/settings/strict")
+    def save_strict(strict: str = Form("")) -> RedirectResponse:
         with transaction(ui.session_factory) as db:
-            ai.record_key(db, True, now=ui.clock.now())
-        return _back("ai", notice="Key checked and saved. Claude suggestions are on.")
-
-    @app.post("/settings/ai-key/remove")
-    def remove_ai_key() -> RedirectResponse:
-        try:
-            ui.secrets().delete(ai.KEY_NAME)
-        except SecretStoreUnavailable:
-            return _back(
-                "ai", error="The Windows Credential Manager is unavailable on this computer."
+            update_settings(
+                db,
+                {"strict_send_rules": strict == "yes"},
+                actor=Actor.APPLICANT,
+                now=ui.clock.now(),
             )
-        with transaction(ui.session_factory) as db:
-            ai.record_key(db, False, now=ui.clock.now())
-        return _back("ai", notice="Key removed. Claude suggestions are off.")
+        ui.wake_worker()
+        return _back(
+            "sending",
+            notice="Strict send rules are on." if strict == "yes" else "Strict send rules are off.",
+        )
 
     @app.post("/settings/lookup-key/{name}")
     def save_lookup_key(name: str, api_key: str = Form("")) -> RedirectResponse:

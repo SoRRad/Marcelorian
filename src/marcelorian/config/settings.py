@@ -71,6 +71,13 @@ class AppSettings:
     #: One active application per place (owner decision N1, 2026-10-19): ``institution``
     #: (institution group), ``department`` (department within it) or ``lab``.
     same_place_scope: str = "institution"
+    #: Off by default (owner decision 2026-10-27): the send button never waits for the
+    #: lab's hours, the spacing or the daily total, and institution-wide limits only warn;
+    #: the app suggests a send time to schedule in Outlook. Never emailing the same
+    #: person twice, a second person in the same lab, or anyone on the do-not-contact
+    #: list always holds. On: the earlier strict rules (send window, spacing, 24-hour
+    #: total, institution limits) lock the button again.
+    strict_send_rules: bool = False
 
     def window_policy(self) -> WindowPolicy:
         return WindowPolicy(
@@ -158,6 +165,7 @@ def validate(settings: AppSettings) -> AppSettings:
         "blackout_year_end",
         "hold_slot_14d_after_email4",
         "signature_step_done",
+        "strict_send_rules",
     ):
         if not isinstance(getattr(settings, key), bool):
             raise SettingsError(f"{key} must be true or false")

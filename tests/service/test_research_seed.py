@@ -99,6 +99,7 @@ def test_dry_run_writes_nothing(world) -> None:
     assert table_counts(world) == before
     assert result.counts() == {
         "new": 5,
+        "duplicate": 0,
         "unchanged": 0,
         "changed": 0,
         "conflicting": 0,

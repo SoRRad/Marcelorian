@@ -10,17 +10,13 @@
 </head>
 <body>
   <header class="topbar">
-    <span class="brand">Marcelorian</span>
+    <a class="brand" href="/">Marcelorian</a>
     <span class="slogan">{{ slogan }}</span>
-    {% block nav %}<nav class="mainnav">
-      <a href="/">Dashboard</a>
-      <a href="/profile">Profile</a>
-      <a href="/research">Research</a>
-      <a href="/research/queue">Verify</a>
-      <a href="/candidates">Candidates</a>
-      <a href="/approvals">Approvals</a>
-      <a href="/tasks">Tasks</a>
-      <a href="/settings">Settings</a>
+    {% block nav %}{% set path = request.url.path if request else "" %}<nav class="mainnav">
+      <a href="/" class="{{ 'current' if path == '/' or path.startswith('/candidates') or path.startswith('/campaigns') or path.startswith('/tasks') else '' }}">Home</a>
+      <a href="/research" class="{{ 'current' if path.startswith('/research') else '' }}">Leads</a>
+      <a href="/approvals" class="{{ 'current' if path.startswith('/approvals') or path.startswith('/messages') or path.startswith('/handoffs') else '' }}">Emails</a>
+      <a href="/settings" class="{{ 'current' if path.startswith('/settings') or path.startswith('/profile') or path.startswith('/data') else '' }}">Settings</a>
     </nav>{% endblock %}
   </header>
   {% if csrf_token %}<div id="notices" class="notices" hidden aria-live="polite"></div>{% endif %}

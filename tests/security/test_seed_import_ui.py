@@ -43,7 +43,7 @@ def count(world, model) -> int:
 
 def test_upload_preview_then_import(client, security, world) -> None:
     csrf = sign_in(client, security)
-    assert "Import a lead list" in client.get("/research").text
+    assert "Add a lead list" in client.get("/research").text
     response = upload(client, csrf, csv_text(standard_rows()))
     preview_url = response.headers["location"]
     page = client.get(preview_url).text

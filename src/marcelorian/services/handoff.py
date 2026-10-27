@@ -18,6 +18,7 @@ Send in Outlook is outside the app's control (spec §9.8).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import random
 from dataclasses import dataclass
@@ -32,7 +33,9 @@ from marcelorian.db.models import (
     AuditEvent,
     Blob,
     Campaign,
+    Institution,
     Message,
+    Pi,
     SendAttempt,
 )
 from marcelorian.domain.enums import (
@@ -515,3 +518,46 @@ def _handed_off(session: Session, attempt_uid: str) -> SendAttempt:
 def _attachment_bytes(session: Session, content: SnapshotContent) -> dict[str, bytes]:
     blobs = {ref.sha256: session.get(Blob, ref.sha256) for ref in content.attachments}
     return {sha: blob.data for sha, blob in blobs.items() if blob is not None}
+
+
+# --------------------------------------------------------------------------- #
+# Suggested send time and the practice "send to myself" (owner decision 2026-10-27)
+# --------------------------------------------------------------------------- #
+
+
+def suggested_send_time(
+    session: Session, message: Message, settings: AppSettings, now: datetime
+) -> datetime | None:
+    """The next moment inside the lab's working hours (PI local time), or now if open.
+
+    Advice only when strict send rules are off: the applicant schedules the send in
+    Outlook (Send later) for this time.
+    """
+    campaign = session.get(Campaign, message.campaign_id)
+    pi = session.get(Pi, campaign.pi_id) if campaign else None
+    institution = session.get(Institution, pi.institution_id) if pi else None
+    if institution is None or not institution.iana_tz:
+        return None
+    try:
+        window = next_window(now, load_zone(institution.iana_tz), settings.window_policy())
+    except SchedulingError:
+        return None
+    return max(now, window.start)
+
+
+def practice_package(session: Session, message: Message, settings: AppSettings) -> HandoffPackage:
+    """Practice only: the approved email as an Outlook hand-off addressed to the
+    applicant's own Outlook address, so the link, file and copy text can be tried for
+    real without anything reaching a PI. Records nothing."""
+    if Mode(message.mode) is not Mode.SANDBOX:
+        raise HandoffError("practice hand-off is for practice mode only")
+    if message.state != MessageState.APPROVED_QUEUED.value:
+        raise HandoffError("approve the email first")
+    mailbox = approvals._active_mailbox(session)
+    if mailbox is None or not mailbox.email:
+        raise HandoffError("add your Outlook address in Settings first")
+    snapshot = _active_snapshot(session, message)
+    content = verify_canonical(snapshot.canonical_json, snapshot.sha256)
+    own = mailbox.email.lower()
+    mine = dataclasses.replace(content, to=own, intended_recipient=own, sender=own)
+    return build_package(mine, _attachment_bytes(session, content), settings.email_signature)

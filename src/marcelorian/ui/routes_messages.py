@@ -21,10 +21,9 @@ from marcelorian.db.engine import transaction
 from marcelorian.db.models import Campaign, Institution, Message, Pi, SendAttempt, Task
 from marcelorian.domain.enums import Actor, MessageState, Mode
 from marcelorian.lookups.enrich import evidence_for
-from marcelorian.platform.secrets import SecretStoreUnavailable
 from marcelorian.services import (
-    ai,
     approvals,
+    autofill,
     drafting,
     profile,
     replies,
@@ -88,6 +87,28 @@ def _cited(db: Session, campaign: Campaign, fields: dict[str, Any]) -> dict[str,
     return cited
 
 
+def _approve(db: Session, message: Message, now: Any) -> str | None:
+    """Approve after the checklist; returns what to show the applicant if it can't."""
+    checks = drafting.checklist(db, message, specialty_display_name=_specialty(), today=now.date())
+    failed = [c.label for c in checks if not c.ok and not c.warn_only]
+    if failed:
+        return "Fix the checklist first: " + "; ".join(failed)
+    try:
+        approvals.approve(
+            db,
+            message,
+            actor=Actor.APPLICANT,
+            now=now,
+            settings=load_settings(db),
+            specialty_display_name=_specialty(),
+        )
+    except approvals.ApprovalError as exc:
+        return " ".join(explain(r) for r in exc.reasons)
+    except CapacityError as exc:
+        return " ".join(explain(r) for r in exc.result.reasons)
+    return None
+
+
 def register(app: FastAPI, ui: UIContext) -> None:
     @app.post("/candidates/{pi_id}/draft")
     def start_draft(pi_id: int) -> RedirectResponse:
@@ -111,27 +132,48 @@ def register(app: FastAPI, ui: UIContext) -> None:
             step = drafting.draftable_step(db, campaign, now)
             message = _draft_message(db, campaign, step) if step else None
             fields = drafting.draft_fields(message) if message else {}
-            personal = fields.get("personal", {}) if isinstance(fields, dict) else {}
+            saved = fields.get("personal", {}) if isinstance(fields, dict) else {}
+            suggestions = (
+                autofill.suggest(db, campaign, step, ui.clock.now().date()) if step else None
+            )
+            # Prefilled from the PI's interests and your profile; your saved lines win.
+            personal = {**(suggestions.first() if suggestions else {}), **saved}
+            preview = (
+                drafting.render(db, campaign, step, personal, specialty_display_name=_specialty())
+                if step
+                else None
+            )
+            edited = bool(fields.get("body_edited")) and message is not None
+            checks = (
+                drafting.checklist(
+                    db, message, specialty_display_name=_specialty(), today=now.date()
+                )
+                if message is not None and message.state in REVIEW_STATES
+                else []
+            )
+            latest = db.scalar(
+                select(Message)
+                .where(Message.campaign_id == campaign.id)
+                .order_by(Message.step.desc())
+            )
             context: dict[str, Any] = {
                 "campaign": campaign,
                 "pi": db.get(Pi, campaign.pi_id),
                 "step": step,
                 "message": message,
+                "latest": latest,
                 "personal": personal,
-                "sources": fields.get("sources", {}),
+                "options": suggestions.options if suggestions else {},
                 "personal_fields": {
                     k: drafting.PERSONAL_FIELDS[k] for k in drafting.personal_fields_for(db, step)
                 }
                 if step
                 else {},
-                "preview": drafting.render(
-                    db, campaign, step, personal, specialty_display_name=_specialty()
-                )
-                if step
-                else None,
+                "preview": preview,
+                "body": (message.draft_body if edited and message else None)
+                or (preview.body if preview else ""),
+                "checks": checks,
                 "practice": Mode(campaign.mode) is Mode.SANDBOX,
-                "ai_on": ai.key_saved(db),
-                "cited": _cited(db, campaign, fields),
                 "interests": tailoring.interests(db, campaign.pi_id).sources[:12],
                 "position": tailoring.confirmed_position(db, campaign.pi_id) if step == 1 else None,
                 "pi_line": tailoring.PI_LINE.get(step or 0),
@@ -163,6 +205,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 for key, text in canned.items():
                     if not personal.get(key):
                         personal[key], sources[key] = text, "practice"
+            # The email box is the preview; the page marks it edited once you type in it.
             body = str(form.get("body", "")) if form.get("edit_body") == "yes" else None
             try:
                 message = drafting.save(
@@ -179,67 +222,14 @@ def register(app: FastAPI, ui: UIContext) -> None:
             except approvals.ApprovalError as exc:
                 return _error_redirect(f"/campaigns/{campaign_id}/draft", exc.reasons)
             message_id = message.id
+            if action == "approve":
+                failure = _approve(db, message, now)
+                if failure is not None:
+                    return _plain_redirect(f"/campaigns/{campaign_id}/draft", error=failure)
+                return RedirectResponse(f"/messages/{message_id}?notice=approved#send", 303)
+            if action == "save_here":
+                return _plain_redirect(f"/campaigns/{campaign_id}/draft", notice="Draft saved.")
         return RedirectResponse(f"/messages/{message_id}", status_code=303)
-
-    @app.post("/campaigns/{campaign_id}/draft/suggest")
-    async def suggest(request: Request, campaign_id: int) -> RedirectResponse:
-        """Ask Claude for the empty personal lines; the result is a draft to review."""
-        form = await request.form()
-        url = f"/campaigns/{campaign_id}/draft"
-        personal = {k: str(form.get(k, "")) for k in drafting.PERSONAL_FIELDS}
-        with transaction(ui.session_factory) as db:
-            campaign = db.get(Campaign, campaign_id)
-            if campaign is None:
-                raise HTTPException(status_code=404)
-            step = drafting.draftable_step(db, campaign, ui.campaign_clock.now())
-            if step is None:
-                return _error_redirect(url, ["campaign_not_draftable"])
-            if not ai.key_saved(db):
-                return _plain_redirect(url, error="Add an Anthropic API key in Settings first.")
-            empty = [k for k, v in personal.items() if not v.strip()]
-            try:
-                context = ai.build_context(db, campaign, step, empty)
-            except ai.AIError as exc:
-                return _plain_redirect(url, error=str(exc))
-        try:  # network and credential store: outside any database transaction
-            completion = ai.request(ui.ai_client(ai.load_key(ui.secrets())), context)
-        except SecretStoreUnavailable:
-            return _plain_redirect(
-                url,
-                error="The Windows Credential Manager is unavailable, so the key cannot be read.",
-            )
-        except ai.AIError as exc:
-            return _plain_redirect(url, error=str(exc))
-        with transaction(ui.session_factory) as db:
-            now = ui.campaign_clock.now()
-            campaign = db.get(Campaign, campaign_id)
-            assert campaign is not None
-            result = ai.validate(db, context, completion)
-            ai.record_usage(db, context, completion, result, now=now)
-            if drafting.draftable_step(db, campaign, now) != step:
-                return _error_redirect(url, ["campaign_not_draftable"])
-            if not result.suggestions:
-                return _plain_redirect(url, error=" ".join(result.problems))
-            sources, basis = drafting.carry_forward(_draft_message(db, campaign, step), personal)
-            for key, item in result.suggestions.items():
-                personal[key], sources[key] = item.text, "ai"
-            basis.update(ai.basis(result))
-            try:
-                drafting.save(
-                    db,
-                    campaign,
-                    step,
-                    personal,
-                    sources,
-                    body_override=None,
-                    specialty_display_name=_specialty(),
-                    now=now,
-                    ai_basis=basis,
-                )
-            except approvals.ApprovalError as exc:
-                return _error_redirect(url, exc.reasons)
-        notice = "Claude suggested the empty lines. Check each one against its evidence."
-        return _plain_redirect(url, error=" ".join(result.problems), notice=notice)
 
     @app.get("/approvals", response_class=HTMLResponse)
     def approval_queue(request: Request) -> HTMLResponse:
@@ -309,30 +299,12 @@ def register(app: FastAPI, ui: UIContext) -> None:
     def approve(message_id: int) -> RedirectResponse:
         url = f"/messages/{message_id}"
         with transaction(ui.session_factory) as db:
-            now = ui.campaign_clock.now()
             message = db.get(Message, message_id)
             if message is None:
                 raise HTTPException(status_code=404)
-            checks = drafting.checklist(
-                db, message, specialty_display_name=_specialty(), today=now.date()
-            )
-            failed = [c.label for c in checks if not c.ok and not c.warn_only]
-            if failed:
-                query = urlencode({"error": "Fix the checklist first: " + "; ".join(failed)})
-                return RedirectResponse(f"{url}?{query}", status_code=303)
-            try:
-                approvals.approve(
-                    db,
-                    message,
-                    actor=Actor.APPLICANT,
-                    now=now,
-                    settings=load_settings(db),
-                    specialty_display_name=_specialty(),
-                )
-            except approvals.ApprovalError as exc:
-                return _error_redirect(url, exc.reasons)
-            except CapacityError as exc:
-                return _error_redirect(url, list(exc.result.reasons))
+            failure = _approve(db, message, ui.campaign_clock.now())
+            if failure is not None:
+                return _plain_redirect(url, error=failure)
         return RedirectResponse(f"{url}?notice=approved", status_code=303)
 
     @app.post("/messages/{message_id}/revoke")

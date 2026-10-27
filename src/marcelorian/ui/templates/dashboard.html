@@ -1,16 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="mode-banner mode-{{ runtime.active_mode.value }}">
-  Mode: <strong>{{ runtime.active_mode.value }}</strong>
-  {% if runtime.dispatch_paused %}— dispatch paused ({{ runtime.pause_reason }}){% else %}— dispatch running{% endif %}
-  {% if runtime.auth_blocked %}<span class="alert">Gmail needs reconnecting</span>{% endif %}
+  {% if runtime.active_mode.value == "sandbox" %}🧪 <strong>Practice mode</strong>: nothing reaches a real PI. Try everything here first.{% else %}✉️ <strong>Live mode</strong>: you send real emails from Outlook.{% endif %}
+  {% if runtime.dispatch_paused %}<span class="warn-text"> · Sending is paused ({{ runtime.pause_reason }}). <a href="/settings#sending">Resume</a></span>{% endif %}
 </section>
+
 {% if setup|selectattr(1, "equalto", false)|list %}
-<section class="card">
+<section class="card hero-card">
   <h2>Getting started</h2>
-  <ul class="checklist">{% for label, done, link in setup %}<li class="{{ 'done' if done else '' }}">{% if done %}{{ label }} ✓{% else %}<a href="{{ link }}">{{ label }}</a>{% endif %}</li>{% endfor %}</ul>
+  {% set done = setup|selectattr(1)|list|length %}
+  <progress class="bar" max="{{ setup|length }}" value="{{ done }}" title="{{ done }} of {{ setup|length }} done">{{ done }} of {{ setup|length }}</progress>
+  <ul class="checklist">{% for label, ok, link in setup %}<li class="{{ 'done' if ok else '' }}">{% if ok %}{{ label }} ✓{% else %}<a href="{{ link }}">{{ label }}</a>{% endif %}</li>{% endfor %}</ul>
 </section>
 {% endif %}
+
 {% if open_handoffs or due_tasks %}
 <section class="card" id="handoffs">
   <h2>To do now</h2>
@@ -20,8 +23,46 @@
   </ul>
 </section>
 {% endif %}
-<section class="card">
-  <h2>Outreach status <span class="note">({{ runtime.active_mode.value }} mode)</span></h2>
+
+<section class="card" id="board">
+  <h2>Your pipeline</h2>
+  {% if notice %}<p class="near">{{ notice }}</p>{% endif %}
+  <form method="get" action="/" class="searchbar">
+    <input type="search" name="q" value="{{ query }}" placeholder="Search a name or institution" maxlength="200" aria-label="Search the board">
+    <button type="submit">Search</button>{% if query %} <a href="/">Clear</a>{% endif %}
+  </form>
+  <div class="quick-buttons" id="lookup-all">
+    <a class="button primary" href="/research">+ Import or check leads</a>
+    {% if bulk.running %}
+    <span class="note">Looking up publications: {{ bulk.done }} of {{ bulk.total }}{% if bulk.current %} ({{ bulk.current }}){% endif %}…</span>
+    <form method="post" action="/candidates/lookup-all/stop"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="back" value="home"><button type="submit">Stop</button></form>
+    {% elif lookup_due %}
+    <form method="post" action="/candidates/lookup-all"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="back" value="home"><button type="submit" title="Free PubMed, OpenAlex and NIH lookups for every contact; runs in the background">Look up all publications ({{ lookup_due }})</button></form>
+    {% endif %}
+  </div>
+  <div class="board">
+    {% for column in board.columns %}
+    <div class="column" data-stage="{{ column.key }}">
+      <h3>{{ loop.index }}. {{ column.label }} <span class="count">{{ column.total }}</span></h3>
+      {% for card in column.cards %}
+      <a class="pcard{{ ' warn' if card.warn else '' }}" href="{{ card.url }}">
+        <div class="who">{{ card.name }}</div>
+        {% if card.place %}<div class="where">{{ card.place }}</div>{% endif %}
+        <progress class="bar" max="{{ stages|length }}" value="{{ card.step }}" title="Step {{ card.step }} of {{ stages|length }}">Step {{ card.step }} of {{ stages|length }}</progress>
+        {% if card.detail %}<div class="where">{{ card.detail }}</div>{% endif %}
+        <div class="next">→ {{ card.action }}</div>
+      </a>
+      {% else %}<div class="empty">Nobody here yet</div>{% endfor %}
+      {% if column.total > column.cards|length %}<p class="more"><a href="{{ '/research' if column.key in ('lead', 'checked') else '/candidates' }}">+ {{ column.total - column.cards|length }} more</a></p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <p class="note">Each card moves to the next column by itself when its step is done. Click a card to do the next step.</p>
+</section>
+
+<details class="card">
+  <summary><strong>Numbers</strong> <span class="note">outreach and checking progress</span></summary>
+  <h3>Outreach status <span class="note">({{ runtime.active_mode.value }} mode)</span></h3>
   <div class="tiles">
     <div class="tile"><span class="tile-number">{{ outreach.contacted }}</span><span class="tile-label">Contacted</span></div>
     <div class="tile"><span class="tile-number">{{ outreach.responded }}</span><span class="tile-label">Responses{% if outreach.response_rate is not none %} ({{ outreach.response_rate }}%){% endif %}</span></div>
@@ -31,57 +72,13 @@
   <table class="research status-table"><tbody>
     {% for key, label in status_labels.items() %}<tr><td>{{ label }}</td><td class="num">{{ outreach.counts[key] }}</td></tr>{% endfor %}
   </tbody></table>
-  {% if not outreach.contacted %}<p class="note">No applications sent yet in this mode.</p>{% endif %}
-</section>
-
-<section class="card" id="places">
-  <h2>Places in use</h2>
-  <p class="note">One active application per place. A place frees after a rejection, a close, or 14 days after the last unanswered follow-up. A reply keeps it in use.</p>
-  <ul>
-    {% for p in outreach.places %}<li><strong>{{ p.place }}</strong> — {{ p.pi_name }}: {{ status_labels[p.state] }}{% if p.free_from %} (free from {{ p.free_from.strftime("%Y-%m-%d") }}){% endif %}</li>{% else %}<li>No place in use.</li>{% endfor %}
-  </ul>
-  <form method="post" action="/actions/same-place-scope" class="scope">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>Count as one place:
-      <select name="scope">{% for value, label in scope_labels.items() %}<option value="{{ value }}" {% if scope == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
-    </label>
-    <label class="check"><input type="checkbox" name="confirm" value="yes"> I understand a narrower setting allows more applications to one institution at once</label>
-    <button type="submit">Save</button>
-  </form>
-  {% if scope_error == 'confirm' %}<p class="alert">A narrower setting allows parallel applications to the same institution. Tick the box to confirm.</p>{% endif %}
-  <p class="note">Institution is the strictest setting. Group or split institutions (for example a separate VA hospital) to adjust what counts as one place.</p>
-</section>
-
-<section class="card">
-  <h2>Verification progress</h2>
+  <h3>Verification progress</h3>
   <div class="tiles">
     <div class="tile"><span class="tile-number">{{ research.confirmed }}</span><span class="tile-label">Confirmed (valid)</span></div>
     <div class="tile"><span class="tile-number">{{ research.confirmed_this_week }}</span><span class="tile-label">Confirmed this week</span></div>
     <div class="tile"><span class="tile-number">{{ research.expiring_soon }}</span><span class="tile-label">Expire within 14 days</span></div>
     <div class="tile"><span class="tile-number">{{ research.to_check }}</span><span class="tile-label">Left to check</span></div>
   </div>
-  <p class="note">{{ research.negative }} marked fellow, left, not faculty, retired or wrong person · {{ research.expired }} confirmations expired · {{ research.total }} research records. <a href="/research/queue">Open the verification queue</a></p>
-</section>
-
-<section class="card">
-  <h2>Campaigns by state</h2>
-  <ul class="counts">
-    {% for state, count in counts|dictsort %}<li>{{ state }}: {{ count }}</li>{% else %}<li>No campaigns yet.</li>{% endfor %}
-  </ul>
-</section>
-<section class="card">
-  <h2>Needs attention</h2>
-  <ul>
-    {% for name, reason in attention %}<li>{{ name }} — {{ reason }}</li>{% else %}<li>Nothing to review.</li>{% endfor %}
-  </ul>
-</section>
-<section class="card">
-  <h2>Research catalog</h2>
-  <p><a href="/research">Browse imported research leads</a> <span class="note">— leads to verify, never approved to send.</span></p>
-</section>
-<section class="card actions">
-  <form method="post" action="/actions/pause"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Pause sending</button></form>
-  <form method="post" action="/actions/resume"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Resume sending</button></form>
-  <p class="note">Closing this browser tab does not stop the tray worker. Quitting the tray, sleep, logout or shutdown prevents dispatch.</p>
-</section>
+  <p class="note">{{ research.negative }} marked fellow, left, not faculty, retired or wrong person · {{ research.expired }} confirmations expired · {{ research.total }} research records.</p>
+</details>
 {% endblock %}

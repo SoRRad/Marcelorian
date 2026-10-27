@@ -1,45 +1,58 @@
 {% extends "base.html" %}
 {% block content %}
-<p><a href="/campaigns/{{ campaign.id }}">&larr; Campaign with {{ pi.full_name }}</a></p>
+<p class="crumbs"><a href="/candidates/{{ pi.id }}">&larr; {{ pi.full_name }}</a></p>
 <section class="card">
   <h2>{% if step %}Email {{ step }} to {{ pi.full_name }}{% else %}Nothing to draft now{% endif %}</h2>
   {% if error %}<p class="alert">{{ error }}</p>{% endif %}
   {% if notice %}<p class="near">{{ notice }}</p>{% endif %}
-  {% if not step %}<p>There is no email to draft for this campaign right now. Follow-ups become draftable when they are due.</p>{% else %}
-  <p class="note">The template fills in your confirmed profile answers. Write the personal lines yourself{% if ai_on %}, ask Claude to suggest the empty ones{% endif %}{% if practice %}, or use practice text{% endif %}. Nothing is sent from this page.</p>
+  {% if not step %}
+  <p>There is no email to draft for this PI right now. Follow-ups become draftable when they are due.</p>
+  {% if latest %}<p><a class="button" href="/messages/{{ latest.id }}">Open Email {{ latest.step }}</a></p>{% endif %}
+  {% else %}
   <div class="interests" id="interests">
     <h3>This PI's interests</h3>
     {% if position %}<p>Posted position you confirmed: <strong>{{ position.title }}</strong> (Email 1 names it).</p>{% endif %}
-    {% if interests %}<ul>{% for kind, text in interests %}<li><span class="note">{{ kind }}:</span> {{ text }}</li>{% endfor %}</ul>
-    {% if pi_line %}<p class="note">Mention one of these topics in the line about the PI. Each email must be specific to this PI, and the line can't repeat one you wrote for someone else.</p>{% endif %}
-    {% else %}<p class="warn-text">Nothing on file yet. Open <a href="/candidates/{{ pi.id }}#evidence">the contact page</a> and use the free lookup, or confirm a posted position there.</p>{% endif %}
+    {% if interests %}<ul class="chips">{% for kind, text in interests %}<li title="{{ kind }}"><span class="chip-kind">{{ kind }}</span> {{ text }}</li>{% endfor %}</ul>
+    {% else %}<p class="warn-text">Nothing on file yet. Open <a href="/candidates/{{ pi.id }}#evidence">the PI's page</a> and click <strong>Look up publications</strong> to fill these in.</p>{% endif %}
   </div>
-  <form method="post" action="/campaigns/{{ campaign.id }}/draft" class="review">
+
+  <form method="post" action="/campaigns/{{ campaign.id }}/draft" class="draft-form" data-draft>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    {% for key, label in personal_fields.items() %}
-    <label>{{ label }}<textarea name="{{ key }}" rows="2" maxlength="600">{{ personal.get(key, '') }}</textarea></label>
-    {% if sources.get(key) == 'practice' %}<span class="badge warn">practice text — never sent in a real email</span>{% endif %}
-    {% if sources.get(key) == 'ai' and key in cited %}<div class="cited"><span class="badge warn">suggested by Claude — check it</span> Based on:
-      <ul>{% for e in cited[key].evidence %}<li>{% if is_web_url(e.url) %}<a href="{{ e.url }}" target="_blank" rel="noopener noreferrer">{{ e.title }}</a>{% else %}{{ e.title }}{% endif %}{% if e.venue %} · {{ e.venue }}{% endif %}{% if e.published_on %} · {{ e.published_on }}{% endif %}</li>{% endfor %}
-      {% for label, value in cited[key].facts %}<li>Your answer “{{ label }}”: {{ value }}</li>{% endfor %}</ul>
-      <span class="note">Edit it freely: a changed line becomes yours.</span></div>{% endif %}
-    {% endfor %}
-    {% if preview %}
-    <h3>Preview</h3>
-    <p class="note">Subject: {{ preview.subject }}{% if preview.cv_ids %} · CV attached{% endif %}</p>
-    <pre class="email-preview">{{ message.draft_body if message and message.draft_body else preview.body }}</pre>
-    {% if preview.missing %}<p class="warn-text">Still missing: {{ preview.missing|join(", ") }}.</p>{% endif %}
-    <details><summary>Edit the whole text instead (advanced)</summary>
-      <label class="check"><input type="checkbox" name="edit_body" value="yes"> Use my edited text below</label>
-      <textarea name="body" rows="14">{{ message.draft_body if message and message.draft_body else preview.body }}</textarea>
-      <p class="note">Edited text is checked again and never sent to Claude. The recipient and subject cannot change.</p>
-    </details>
-    {% endif %}
-    <div class="quick-buttons">
-      <button type="submit" name="action" value="save" class="primary">Save draft and review</button>
-      {% if ai_on %}<button type="submit" formaction="/campaigns/{{ campaign.id }}/draft/suggest" title="One request to Claude using your API key (a few cents)">Suggest empty lines with Claude</button>{% endif %}
-      {% if practice %}<button type="submit" name="action" value="practice">Fill empty lines with practice text</button>{% endif %}
+    <input type="hidden" name="edit_body" value="{{ 'yes' if message and body != preview.body else 'no' }}" data-edited>
+    <div class="draft-grid">
+      <div class="draft-lines">
+        <h3>1. Personal lines <span class="note">prefilled: pick another or edit</span></h3>
+        {% for key, label in personal_fields.items() %}
+        <div class="line">
+          <label for="f-{{ key }}">{{ label }}</label>
+          {% set choices = options.get(key) or [] %}
+          {% if choices|length > 1 %}
+          <select data-fill="{{ key }}" aria-label="Suggestions for {{ label }}">
+            <option value="">Other suggestions ({{ choices|length }})…</option>
+            {% for o in choices %}<option value="{{ o.text }}">{{ o.basis }}: {{ o.text[:110] }}{% if o.text|length > 110 %}…{% endif %}</option>{% endfor %}
+          </select>
+          {% endif %}
+          <textarea id="f-{{ key }}" name="{{ key }}" rows="{{ 4 if key == 'personalized_sentence' else 2 }}" maxlength="600" data-line="{{ key }}">{{ personal.get(key, '') }}</textarea>
+          {% if not personal.get(key) %}<span class="note">Nothing to suggest yet; write your own.</span>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      <div class="draft-email">
+        <h3>2. Your email <span class="note">edit anything directly</span></h3>
+        <p class="note">To: {{ pi.full_name }} · Subject: <strong>{{ preview.subject }}</strong>{% if preview.cv_ids %} · 📎 CV attached{% endif %}</p>
+        <textarea name="body" class="email-edit" rows="20" data-body>{{ body }}</textarea>
+        {% if preview.missing %}<p class="warn-text">Still missing: {{ preview.missing|join(", ") }}.</p>{% endif %}
+      </div>
     </div>
+    {% if checks %}
+    <ul class="checks">{% for c in checks if not c.ok %}<li class="{{ 'warn-text' if c.warn_only else 'alert' }}">{{ "⚠" if c.warn_only else "✗" }} {{ c.label }}{% if c.detail %}: {{ c.detail }}{% endif %}</li>{% endfor %}</ul>
+    {% endif %}
+    <div class="quick-buttons sticky-actions">
+      <button type="submit" name="action" value="approve" class="primary">Approve ✓</button>
+      <button type="submit" name="action" value="save_here">Save draft</button>
+      <button type="submit" name="action" value="save">Save and see the checklist</button>
+    </div>
+    <p class="note">Approving never sends anything: you get the send options next.</p>
   </form>
   {% endif %}
 </section>

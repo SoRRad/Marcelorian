@@ -47,6 +47,19 @@ def _back(*, error: str = "", notice: str = "") -> RedirectResponse:
     )
 
 
+#: What each import category means to the applicant (records absent from a second file
+#: are kept, so that count is not shown: it only confused people adding a file).
+COUNT_LABELS = {
+    "new": "New leads to add",
+    "duplicate": "Already in your list under another file (skipped, never added twice)",
+    "unchanged": "Already imported, unchanged",
+    "changed": "Updated from this file",
+    "conflicting": "Updated, and you had reviewed them (please re-check)",
+    "excluded": "Outside the US (kept but hidden)",
+    "invalid": "Rows with problems",
+}
+
+
 def register(app: FastAPI, ui: UIContext) -> None:
     @app.post("/research/import")
     async def upload(file: UploadFile = File(...)) -> RedirectResponse:  # noqa: B008
@@ -80,7 +93,8 @@ def register(app: FastAPI, ui: UIContext) -> None:
             "token": token,
             "name": item.name,
             "plan": plan,
-            "counts": plan.counts(),
+            "counts": {label: plan.counts()[key] for key, label in COUNT_LABELS.items()},
+            "duplicates": len(plan.duplicate_of),
             "errors": plan.invalid[:MAX_LISTED_ERRORS],
             "more_errors": max(0, len(plan.invalid) - MAX_LISTED_ERRORS),
         }
@@ -104,7 +118,9 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 )
         except SeedRejected:
             return _back(error="The file has invalid rows, so nothing was imported.")
-        return _back(notice=f"Imported {result.row_count} leads (import #{result.import_id}).")
+        counts = result.counts()
+        skipped = f", {counts['duplicate']} duplicate(s) skipped" if counts["duplicate"] else ""
+        return _back(notice=f"Imported: {counts['new']} new lead(s){skipped}.")
 
     @app.post("/research/import/{token}/cancel")
     def cancel(token: str) -> RedirectResponse:

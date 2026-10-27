@@ -46,7 +46,7 @@ from marcelorian.domain.research import (
     is_web_url,
 )
 from marcelorian.lookups import keys as lookup_keys
-from marcelorian.lookups.bulk import PAUSE_SECONDS, BulkLookup
+from marcelorian.lookups.bulk import PAUSE_SECONDS, BulkLookup, needing_lookup
 from marcelorian.lookups.http import Fetcher, HttpFetcher
 from marcelorian.platform.paths import AppPaths
 from marcelorian.platform.secrets import SecretStore, open_secret_store
@@ -55,12 +55,14 @@ from marcelorian.services import (
     backup,
     exports,
     handoff,
+    pipeline,
     practice,
     profile,
     replies,
     research_seed,
     runtime,
     status,
+    tailoring,
 )
 from marcelorian.services.ai import AnthropicClient, ClientFactory
 from marcelorian.services.gateway import SendGateway
@@ -84,6 +86,16 @@ SCOPE_LABELS = {
     "institution": "Institution (or institution group)",
     "department": "Department within an institution",
     "lab": "Lab",
+}
+#: Sortable columns on the Leads page (click a column heading; again to reverse).
+SORT_KEYS: dict[str, Callable[[Any], Any]] = {
+    "name": lambda r: (r.record.name or "").casefold(),
+    "institution": lambda r: (r.record.institution or "").casefold(),
+    "type": lambda r: r.record.record_type,
+    "confidence": lambda r: LEVELS.index(r.confidence.level) if r.confidence.level in LEVELS else 0,
+    "freshness": lambda r: r.record.freshness_date or "",
+    "check": lambda r: r.record.local_verification,
+    "priority": lambda r: r.record.priority_band if r.record.priority_band is not None else 999,
 }
 FILTER_FIELDS = (
     "record_type",
@@ -277,6 +289,9 @@ def create_app(
                 for t in replies.open_tasks(db)
                 if not t.due_on or t.due_on <= clock.now().date().isoformat()
             ]
+            query = request.query_params.get("q", "")[:200]
+            the_board = pipeline.board(db, view.active_mode, clock.now().date(), query)
+            lookup_due = len(needing_lookup(db, clock.now()))
         return templates.TemplateResponse(
             request,
             "dashboard.html",
@@ -295,6 +310,12 @@ def create_app(
                 "setup": setup,
                 "open_handoffs": open_handoffs,
                 "due_tasks": due_tasks,
+                "board": the_board,
+                "stages": pipeline.STAGES,
+                "query": query,
+                "bulk": bulk.progress(),
+                "lookup_due": lookup_due,
+                "notice": request.query_params.get("notice", ""),
             },
         )
 
@@ -316,10 +337,10 @@ def create_app(
                     confirm_less_conservative=confirm == "yes",
                 )
             except ConfirmationRequired:
-                return RedirectResponse("/?scope_error=confirm#places", status_code=303)
+                return RedirectResponse("/settings?scope_error=confirm#places", status_code=303)
             except SettingsError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return RedirectResponse("/#places", status_code=303)
+        return RedirectResponse("/settings#places", status_code=303)
 
     @app.post("/actions/pause")
     def pause(request: Request) -> RedirectResponse:
@@ -342,14 +363,29 @@ def create_app(
         except ValueError:
             page = 1
         today = clock.now().date()
+        sort = params.get("sort", "")
+        descending = params.get("dir", "") == "desc"
+        show_phd = params.get("phd", "") == "show"
         with transaction(session_factory) as db:
             rows = research_seed.list_records(db, research_seed.Filters(**chosen), today)
+            hidden_phd = 0
+            if not show_phd:
+                kept = [r for r in rows if not tailoring.record_is_phd_posting(r.record)]
+                hidden_phd, rows = len(rows) - len(kept), kept
+            if sort in SORT_KEYS:
+                rows.sort(key=SORT_KEYS[sort], reverse=descending)
             options = research_seed.filter_options(db)
             institutions = research_seed.institution_names(db)
             last_import = next(iter(research_seed.imports(db)), None)
             queue_total = len(research_seed.queue(db, today))
         start = (page - 1) * RESEARCH_PAGE_SIZE
-        query_base = urlencode({k: v for k, v in chosen.items() if v})
+        kept_params = {k: v for k, v in chosen.items() if v}
+        if show_phd:
+            kept_params["phd"] = "show"
+        filter_base = urlencode(kept_params)
+        if sort in SORT_KEYS:
+            kept_params.update(sort=sort, dir="desc" if descending else "asc")
+        query_base = urlencode(kept_params)
         return templates.TemplateResponse(
             request,
             "research_list.html",
@@ -370,6 +406,12 @@ def create_app(
                 "last_import": last_import,
                 "queue_total": queue_total,
                 "query_base": query_base,
+                "filter_base": filter_base,
+                "sort": sort,
+                "descending": descending,
+                "hidden_phd": hidden_phd,
+                "show_phd": show_phd,
+                "advanced": any(chosen[k] for k in FILTER_FIELDS if k != "query"),
             },
         )
 

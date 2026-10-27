@@ -85,10 +85,11 @@ def test_tester_guide_in_a_real_browser(served, tmp_path: Path) -> None:
     from playwright.sync_api import expect, sync_playwright
 
     base, sign_in_url, seed = served
+    shots = os.environ.get("MARCELORIAN_SHOTS")  # optional folder for screenshots
     problems: list[str] = []
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
-        page = browser.new_page()
+        page = browser.new_page(viewport={"width": 1360, "height": 900})
         page.on("console", lambda m: m.type == "error" and problems.append(m.text))
         page.on(
             "response",
@@ -99,23 +100,22 @@ def test_tester_guide_in_a_real_browser(served, tmp_path: Path) -> None:
             with page.expect_navigation():
                 locator.click()
 
+        def shot(name: str) -> None:
+            if shots:
+                page.screenshot(path=str(Path(shots) / f"{name}.png"), full_page=True)
+
         # Sign in with the one-time link.
         page.goto(sign_in_url)
         page.wait_for_url(re.compile(r"^(?!.*bootstrap).*$"))
+        shot("01-home-empty")
 
-        # Profile: confirm the required answers (every form posts with the browser's Origin).
+        # Settings → Your profile: one form, one "Save and confirm all".
         page.goto(f"{base}/profile")
         for key, value in PROFILE.items():
-            section = page.locator(f"#f-{key}")
-            section.locator("[name=value]").fill(value)
-            submit(section.locator("button[value=confirm]"))
-        for key in ("funding_preference",):
-            section = page.locator(f"#f-{key}")
-            options = section.locator("select[name=value] option")
-            section.locator("select[name=value]").select_option(
-                options.nth(1).get_attribute("value")
-            )
-            submit(section.locator("button[value=confirm]"))
+            page.locator(f"#f-{key} [name=v_{key}]").fill(value)
+        funding = page.locator("#f-funding_preference select")
+        funding.select_option(funding.locator("option").nth(1).get_attribute("value"))
+        submit(page.locator("button:has-text('Save and confirm all')"))
         expect(page.locator("main")).to_contain_text("All required answers are confirmed")
         page.set_input_files("#cv input[type=file]", str(tmp_path / "cv.pdf"))
         submit(page.locator("#cv button[type=submit]"))
@@ -123,16 +123,19 @@ def test_tester_guide_in_a_real_browser(served, tmp_path: Path) -> None:
         submit(page.locator("#signature button[type=submit]"))
         page.fill("#outlook input[name=email]", "alex.synthetic@example.com")
         submit(page.locator("#outlook button[type=submit]"))
+        shot("02-profile")
 
-        # Lead list import from the Research page (upload by script with the CSRF header).
+        # Leads: import the list (upload by script with the CSRF header).
         page.goto(f"{base}/research")
         page.set_input_files("input[name=file]", str(seed))
         with page.expect_navigation(url=re.compile(r"/research/import/")):
             page.click("text=Check the file")
+        shot("03-import-preview")
         submit(page.locator("text=Import these leads"))
         expect(page.locator("main")).to_contain_text("Imported")
+        shot("04-leads")
 
-        # Verify the first lead, then turn it into a contact.
+        # Check the first lead, then turn it into a contact.
         page.goto(f"{base}/research/queue")
         record_href = page.locator("main h2 a").first.get_attribute("href")
         page.fill("input[name=source]", "Department faculty page (synthetic)")
@@ -146,34 +149,41 @@ def test_tester_guide_in_a_real_browser(served, tmp_path: Path) -> None:
             form.locator("input[name=not_same_person]").check()
         submit(form.locator("button[type=submit]"))
 
-        # Look up everyone in the background, then wait for it to finish.
-        page.goto(f"{base}/candidates")
-        submit(page.locator("text=/Look up all/"))
+        # Home: look up everyone in the background, then wait for it to finish.
+        page.goto(f"{base}/")
+        submit(page.locator("text=/Look up all publications/"))
         deadline = time.monotonic() + 30
-        while "Every contact has recent publications" not in page.content():
+        while "Look up all publications" in page.content() or "Looking up" in page.content():
             assert time.monotonic() < deadline, "bulk lookup did not finish"
             time.sleep(0.2)
-            page.goto(f"{base}/candidates")
+            page.goto(f"{base}/")
+        shot("05-home-board")
 
-        # Tailored draft: the line about the PI names one of their topics.
-        page.locator('main a[href^="/candidates/"]').first.click()
+        # The contact's card leads to drafting; the lines come prefilled.
+        page.locator('.column[data-stage="contact"] a.pcard').first.click()
+        page.wait_for_load_state()
+        shot("06-contact")
         submit(page.locator("text=Draft an email"))
         expect(page.locator("#interests")).to_contain_text("Glaucoma progression")
-        page.fill(
-            "textarea[name=personalized_sentence]",
-            "Your glaucoma progression work fits my training.",
-        )
-        page.fill("textarea[name=skills_line]", "OCT image analysis and Python")
-        page.fill("textarea[name=contribution_line]", "your imaging projects")
-        submit(page.locator("button[value=save]"))
-        expect(page.locator("main")).to_contain_text("✓ Tailored to this PI")
-        submit(page.locator("button:has-text('Approve')"))
+        sentence = page.locator("textarea[name=personalized_sentence]")
+        assert sentence.input_value().strip(), "the line about the PI is prefilled"
+        assert "July" not in page.locator("textarea[name=body]").input_value()  # no start date
+        picker = page.locator('select[data-fill="personalized_sentence"]')
+        if picker.count():
+            picker.select_option(index=1)
+            assert sentence.input_value() in page.locator("textarea[name=body]").input_value()
+        shot("07-draft")
+        submit(page.locator("button[value=approve]"))
         expect(page.locator("main")).to_contain_text("Approved")
+        expect(page.locator("main")).to_contain_text("Suggested send time")
+        shot("08-approved")
 
-        # Practice send: skip ahead to the send time if the lab is closed right now.
-        skip = page.locator("text=Practice: skip ahead to the send time")
-        if skip.count():
-            submit(skip)
+        # Try it in Outlook (addressed to me), then practice-send it.
+        page.locator("text=Try it in Outlook (sent to you)").click()
+        page.wait_for_load_state()
+        expect(page.locator("main")).to_contain_text("alex.synthetic@example.com")
+        shot("09-try-outlook")
+        page.go_back()
         submit(page.locator("button:has-text('Send (practice)')"))
         expect(page.locator("main")).to_contain_text("Recorded as sent")
 
@@ -184,7 +194,14 @@ def test_tester_guide_in_a_real_browser(served, tmp_path: Path) -> None:
         submit(page.locator("#reply button.primary"))
         expect(page.locator("main")).to_contain_text("Reply recorded: Positive")
 
-        # Reports and a backup.
+        # Emails, Settings, reports and a backup.
+        page.goto(f"{base}/approvals")
+        expect(page.locator("main")).to_contain_text("Ready to send")
+        page.goto(f"{base}/settings")
+        expect(page.locator("main")).to_contain_text("Sending rules")
+        shot("10-settings")
+        page.goto(f"{base}/")
+        shot("11-home-after")
         page.goto(f"{base}/data")
         submit(page.locator("text=Update now"))
         expect(page.locator("main")).to_contain_text("Exports updated")

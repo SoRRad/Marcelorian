@@ -652,3 +652,56 @@ owner's written description of each finding.
     before extracting (Mark-of-the-Web otherwise passes to the extracted files). The
     RePORTER request is unchanged (documented; `NEI` not confirmed live) and needs
     one real lookup on the tester's laptop, as do both Outlook link hosts.
+54. **Simpler, faster workflow (owner feedback after testing, 2026-10-27).**
+    - **Send rules.** A new setting, `strict_send_rules`, is off by default (owner
+      answer "only the double-email guard"). With it off, the Outlook hand-off and the
+      practice send ignore the send window, the spacing and the 24-hour total. The page
+      shows a suggested send time instead: the next Mon–Fri 08:00–16:00 slot at the
+      PI's location, with "Schedule send" advice.
+    - **What still blocks.** Institution-wide limits (pending per institution, new
+      contacts per 30 days, a place wider than the lab) only warn. These still block:
+      - a second person in the same lab (pending per lab, or a same-place conflict at
+        lab level);
+      - the same person or address twice;
+      - the do-not-contact list;
+      - a missing address.
+    - **Checklist.** Every item except "address usable" and "do-not-contact" is a
+      warning. The Gmail channel, which sends unattended, always keeps the strict rules.
+      Turning the setting on restores the earlier behaviour; the test suite runs with it
+      on, and new tests cover the default.
+    - **Drafting.**
+      - The personal lines are prefilled (`services/autofill.py`) from checked sources:
+        recent paper titles, verified and OpenAlex topics, active NIH grants, a
+        confirmed posting, and the applicant's research interests and skills.
+      - Each line has a drop-down of other suggestions.
+      - The email box is the editable preview: line changes are mirrored into it, and
+        typing in it keeps the text as an edit.
+      - **Approve** is on the draft page.
+      - No start date: `{opening_line}` no longer names one. `{availability}` remains
+        for custom templates, and the earliest start is optional.
+      - The Claude section and its routes are removed; `services/ai.py` is kept.
+    - **Leads.**
+      - A second file never adds a person twice. A new id with the same address, or the
+        same name at the same institution, is skipped as `duplicate`, and links to it
+        point to the kept record. For postings, the name and institution must match
+        along with the application link (portals are reused across cycles).
+      - PhD-student postings are hidden from the list and never offered for a contact.
+      - The list has a search box, sortable columns, and filters folded away.
+    - **Contacts.**
+      - An address can be added, changed or removed at any time. A change goes through
+        the invalidating update (B18).
+      - An address already used by another contact is refused.
+    - **Layout.**
+      - Four places: Home, Leads, Emails, Settings (profile and data are tabs).
+      - Home is a board with a card and progress bar per person, across Lead → Checked →
+        Contact → Drafted → Ready to send → Sent → Replied (`services/pipeline.py`).
+      - The profile is one form with "Save and confirm all"; unchanged answers keep
+        their version, so no approval is withdrawn needlessly.
+      - Refreshed dark theme, with native progress bars (the CSP blocks inline styles).
+    - **Practice in Outlook.** "Try it in Outlook (sent to you)" builds the real link,
+      copy text and `.eml` addressed to the applicant's own Outlook address, and
+      records nothing.
+    - **Own publications.** The PubMed search now combines ORCID, the full name, "Last
+      Initials", and an optional "name as on your papers" with OR, ignoring degrees in
+      the name. It says when nothing was found.
+

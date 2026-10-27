@@ -49,8 +49,17 @@ def send_context(db: Session, message: Message, now: datetime) -> dict[str, Any]
     if status.unlock_at and institution and institution.iana_tz:
         unlock_local = status.unlock_at.astimezone(ZoneInfo(institution.iana_tz))
     channel = approvals.message_channel(db, Mode(message.mode))
+    suggested = handoff.suggested_send_time(db, message, settings, now)
+    mailbox = approvals._active_mailbox(db)
     return {
         "send": {
+            "strict": settings.strict_send_rules,
+            "suggested": suggested,
+            "suggested_local": suggested.astimezone(ZoneInfo(institution.iana_tz))
+            if suggested and institution and institution.iana_tz
+            else None,
+            "send_now": suggested is not None and suggested <= now,
+            "own_address": mailbox.email if mailbox else "",
             "ready": status.ready,
             "reason": explain(status.reason),
             "unlock_at": status.unlock_at,
@@ -92,6 +101,45 @@ def register(app: FastAPI, ui: UIContext) -> None:
             return _redirect(url, error=explain(result.reason) or result.outcome)
         query = urlencode({"method": method if method in ("link", "file", "copy") else "link"})
         return RedirectResponse(f"/handoffs/{result.attempt_uid}?{query}", status_code=303)
+
+    @app.get("/messages/{message_id}/try-outlook", response_model=None)
+    def try_outlook(request: Request, message_id: int) -> HTMLResponse | RedirectResponse:
+        """Practice: the approved email in Outlook, addressed to the applicant only."""
+        with transaction(ui.session_factory) as db:
+            message = db.get(Message, message_id)
+            if message is None:
+                raise HTTPException(status_code=404)
+            try:
+                package = handoff.practice_package(db, message, load_settings(db))
+            except (handoff.HandoffError, ValueError) as exc:
+                return _redirect(f"/messages/{message_id}", error=f"Can't try it yet: {exc}.")
+            campaign = db.get(Campaign, message.campaign_id)
+            assert campaign is not None
+            context: dict[str, Any] = {
+                "message": message,
+                "campaign": campaign,
+                "pi": db.get(Pi, campaign.pi_id),
+                "package": package,
+            }
+        return ui.render(request, "try_outlook.html", context)
+
+    @app.get("/messages/{message_id}/try-outlook/email.eml")
+    def try_outlook_file(message_id: int) -> Response:
+        with transaction(ui.session_factory) as db:
+            message = db.get(Message, message_id)
+            if message is None:
+                raise HTTPException(status_code=404)
+            try:
+                package = handoff.practice_package(db, message, load_settings(db))
+            except (handoff.HandoffError, ValueError) as exc:
+                raise HTTPException(status_code=404) from exc
+        return Response(
+            content=package.eml,
+            media_type="message/rfc822",
+            headers={
+                "Content-Disposition": f'attachment; filename="practice-{package.eml_filename}"'
+            },
+        )
 
     @app.get("/handoffs/{attempt_uid}", response_class=HTMLResponse)
     def handoff_page(request: Request, attempt_uid: str) -> HTMLResponse:
