@@ -288,7 +288,9 @@ def notices(session: Session, *, now: datetime, campaign_now: datetime) -> list[
                 to_review,
             )
         )
-    ready = scheduling.dispatchable_message_ids(session, mode, campaign_now)
+    ready = scheduling.dispatchable_message_ids(
+        session, mode, campaign_now, any_time=not load_settings(session).strict_send_rules
+    )
     if ready:
         verb = "practice-send" if mode is Mode.SANDBOX else "open in Outlook"
         found.append(

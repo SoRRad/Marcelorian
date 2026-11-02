@@ -77,6 +77,7 @@
     {% if p.scope_note %}<br><span class="note">{{ p.scope_note }}</span>{% endif %}
     <form method="post" action="/candidates/{{ pi.id }}/postings/{{ p.record_id }}" class="inline-buttons"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% if p.confirmed %}<span class="badge">confirmed current</span> <button type="submit" name="action" value="withdraw">No longer current</button>
+    {% elif p.status in closed_statuses %}<span class="badge warn">closed: not offered</span>
     {% else %}<button type="submit" name="action" value="confirm">I checked: this posting is current</button>{% endif %}</form></li>{% endfor %}</ul>
   <p class="note">Once confirmed, Email 1 names the position. If the posting asks you to apply through its own page, apply there too.</p>
   {% elif not verified_topics %}<p class="note">No posted position or verified topic for this contact. Use <strong>Look up PubMed, OpenAlex and NIH grants</strong> below to load their publications.</p>{% endif %}

@@ -145,3 +145,38 @@ def test_phd_postings_are_never_offered_for_a_contact(world) -> None:
 )
 def test_applicant_search_term(name: str, orcid: str, pubmed_name: str, expected: str) -> None:
     assert applicant_term(name, orcid, pubmed_name) == expected
+
+
+def test_closed_postings_are_shown_but_cannot_be_confirmed(world) -> None:
+
+    from sqlalchemy import select
+
+    from marcelorian.db.models import ResearchRecord
+
+    camp = world.campaign(world.pi(world.institution()))
+    pi_id = pi_of(world, camp)
+    record_id = link_seed(world, pi_id, posting="Synthetic Retina Fellowship 2025")
+    with transaction(world.factory) as s:
+        s.get(ResearchRecord, record_id).opportunity_status = "closed_cycle"
+        assert [p.status for p in tailoring.linked_postings(s, pi_id)] == ["closed_cycle"]
+        with pytest.raises(tailoring.TailoringError, match="closed"):
+            tailoring.confirm_posting(s, pi_id, record_id, now=world.clock.now())
+        assert s.scalars(select(ResearchRecord)).first() is not None
+
+
+def test_ready_to_send_notice_ignores_the_window_without_strict_rules(world) -> None:
+    from marcelorian.services.worker import notices
+    from tests.service.test_handoff import ny
+
+    world.clock.set(ny(2026, 10, 24, 22, 0))  # Saturday night: outside every window
+    camp = world.campaign(world.pi(world.institution()))
+    world.draft_and_approve(camp)
+
+    def ready() -> bool:
+        with transaction(world.factory) as s:
+            now = world.clock.now()
+            return any(n.key == "ready_to_send" for n in notices(s, now=now, campaign_now=now))
+
+    assert not ready()  # strict rules (the test default): waits for Monday
+    world.settings(strict_send_rules=False)
+    assert ready()
