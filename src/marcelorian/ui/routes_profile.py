@@ -8,7 +8,12 @@ from urllib.parse import urlencode
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from marcelorian.config.settings import SettingsError, load_settings, set_signature
+from marcelorian.config.settings import (
+    SettingsError,
+    load_settings,
+    set_signature,
+    update_settings,
+)
 from marcelorian.db.engine import transaction
 from marcelorian.domain.enums import Actor
 from marcelorian.domain.recipients import RecipientError
@@ -42,6 +47,8 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 "notice": request.query_params.get("notice", ""),
                 "publications": enrich.applicant_publications(db, me.id),
                 "pub_run": enrich.last_runs(db, None).get("pubmed"),
+                "outlook_app": settings.outlook_app,
+                "pubmed_name_hint": profile.pubmed_name_hint(db, me.id),
             }
         return ui.render(request, "profile.html", context)
 
@@ -122,9 +129,19 @@ def register(app: FastAPI, ui: UIContext) -> None:
         return _back("cv")
 
     @app.post("/profile/publications/import")
-    def import_publications() -> RedirectResponse:
+    def import_publications(pubmed_name: str = Form("")) -> RedirectResponse:
         with transaction(ui.session_factory) as db:
             me = profile.applicant(db, ui.clock.now())
+            if pubmed_name.strip():  # asked right here, beside the import button
+                profile.set_fact(
+                    db,
+                    me.id,
+                    "pubmed_name",
+                    pubmed_name.strip(),
+                    confirm=True,
+                    actor=Actor.APPLICANT,
+                    now=ui.clock.now(),
+                )
             facts = profile.facts(db, me.id)
             name = facts["full_name"].value if "full_name" in facts else ""
             orcid = facts["orcid"].value if "orcid" in facts else ""
@@ -179,3 +196,14 @@ def register(app: FastAPI, ui: UIContext) -> None:
             except (RecipientError, approvals.MailboxIdentityRefused, ValueError) as exc:
                 return _back("outlook", str(exc))
         return _back("outlook")
+
+    @app.post("/profile/outlook-app")
+    def save_outlook_app(app_kind: str = Form("")) -> RedirectResponse:
+        with transaction(ui.session_factory) as db:
+            try:
+                update_settings(
+                    db, {"outlook_app": app_kind}, actor=Actor.APPLICANT, now=ui.clock.now()
+                )
+            except SettingsError:
+                return _back("outlook", "Choose one of the Outlook options.")
+        return _back("outlook", notice="Saved: the best send option for it comes first.")

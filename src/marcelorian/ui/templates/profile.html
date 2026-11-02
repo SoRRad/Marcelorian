@@ -19,7 +19,7 @@
       {% elif field.kind == 'long' %}
       <textarea name="v_{{ field.key }}" rows="2" maxlength="2000">{{ fact.value if fact else '' }}</textarea>
       {% else %}
-      <input type="text" name="v_{{ field.key }}" maxlength="2000" value="{{ fact.value if fact else '' }}" {% if field.kind == 'month' %}placeholder="2027-07"{% endif %}>
+      <input type="text" name="v_{{ field.key }}" maxlength="2000" value="{{ fact.value if fact else '' }}" {% if field.kind == 'month' %}placeholder="2027-07"{% elif field.key == 'pubmed_name' and pubmed_name_hint %}placeholder="for example {{ pubmed_name_hint }}"{% endif %}>
       {% endif %}
     </label>
     <span class="note">{% if field.help %}{{ field.help }} {% endif %}{% if fact %}{{ "✓ confirmed" if fact.status == "confirmed" else "draft, not confirmed" }}{% endif %}</span>
@@ -41,9 +41,12 @@
 <section class="card" id="publications">
   <h2>Your publications</h2>
   <p class="note">Imported from PubMed by your ORCID iD (or full name). Confirm the ones that are yours; only confirmed ones can be mentioned.</p>
-  <form method="post" action="/profile/publications/import" class="inline">
+  <form method="post" action="/profile/publications/import" class="review">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit">Import from PubMed</button>
+    {% set saved_name = facts.get("pubmed_name") %}
+    <label>How does PubMed list your name? <input type="text" name="pubmed_name" maxlength="200" value="{{ saved_name.value if saved_name else pubmed_name_hint }}" placeholder="for example Shahriari R"></label>
+    <span class="note">Surname, then initials, as on your papers. Change it if PubMed spells you differently (e.g. with a middle initial). It is saved to your profile.</span>
+    <button type="submit" class="primary">Import from PubMed</button>
     {% if pub_run %}<span class="note">Last checked {{ pub_run.ran_at.strftime("%Y-%m-%d %H:%M") }} UTC{% if not pub_run.ok %} — {{ pub_run.message }}{% endif %}</span>{% endif %}
   </form>
   <ul>
@@ -76,6 +79,17 @@
     <label>Email address <input type="email" name="email" maxlength="320" value="{{ mailbox.email if mailbox else '' }}" required></label>
     <div class="quick-buttons"><button type="submit" class="primary">Save address</button>
       {% if mailbox %}<span class="note">Saved ({{ mailbox.kind }})</span>{% endif %}</div>
+  </form>
+  <form method="post" action="/profile/outlook-app" class="review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Which Outlook do you send from?
+      <select name="app_kind">
+        <option value="web" {% if outlook_app == 'web' %}selected{% endif %}>Outlook on the web (in the browser)</option>
+        <option value="new" {% if outlook_app == 'new' %}selected{% endif %}>The new Outlook app for Windows</option>
+        <option value="classic" {% if outlook_app == 'classic' %}selected{% endif %}>Classic Outlook (Microsoft 365 desktop)</option>
+      </select></label>
+    <div class="quick-buttons"><button type="submit">Save</button>
+      <span class="note">The send option that works best for it comes first. Not sure? In the Outlook app, a "New Outlook" switch that is on means the new app; "Try the new Outlook" switched off means classic.</span></div>
   </form>
 </section>
 {% endblock %}

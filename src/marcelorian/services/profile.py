@@ -45,16 +45,16 @@ class Field:
 FIELDS: tuple[Field, ...] = (
     Field("full_name", "Full name", "As used in the first email's introduction.", required=True),
     Field(
+        "pubmed_name",
+        "Your name as on your papers (optional)",
+        'As PubMed lists it, e.g. "Shahriari R". Helps find your publications.',
+    ),
+    Field(
         "signature_name",
         "Name for closing follow-ups",
         "Defaults to your full name; never shortened automatically.",
     ),
     Field("orcid", "Your ORCID iD (optional)", "Used to import your publications.", "orcid"),
-    Field(
-        "pubmed_name",
-        "Your name as on your papers (optional)",
-        'As PubMed lists it, e.g. "Shahriari R". Helps find your publications.',
-    ),
     Field("degrees", "Degree(s)", "For example MD, MPH."),
     Field("medical_school", "Medical school"),
     Field("graduation_year", "Graduation year"),
@@ -143,6 +143,19 @@ def validate(key: str, value: str) -> str:
     if text and field.kind == "choice" and field.choices and text not in field.choices:
         raise ProfileError(f"{field.label}: choose one of the listed options")
     return text
+
+
+def pubmed_name_hint(session: Session, applicant_id: int) -> str:
+    """How PubMed probably lists the applicant ("Reza Shahriari" -> "Shahriari R")."""
+    fact = facts(session, applicant_id).get("full_name")
+    words = [
+        w
+        for w in str(fact.value if fact else "").replace(",", " ").split()
+        if w.rstrip(".").casefold() not in {"dr", "prof", "md", "phd", "mph", "do"}
+    ]
+    if len(words) < 2:
+        return ""
+    return f"{words[-1]} {''.join(w[0].upper() for w in words[:-1])}"
 
 
 def set_fact(

@@ -122,3 +122,33 @@ def test_practice_email_can_be_tried_in_outlook(client, security, world) -> None
     assert eml.status_code == 200 and b"To: me@synthetic-hospital.test" in eml.content
     assert world.message(mid).state == "approved_queued"
     assert csrf
+
+
+def test_outlook_app_is_asked_beside_the_address_and_orders_the_buttons(
+    client, security, world
+) -> None:
+    csrf = sign_in(client, security)
+    page = client.get("/profile").text
+    assert "Which Outlook do you send from?" in page
+    assert "outlook_app must be" not in page
+    response = post(client, "/profile/outlook-app", csrf, app_kind="classic")
+    assert "best+send+option" in response.headers["location"]
+    assert 'value="classic" selected' in client.get("/profile").text
+    assert (
+        "error=" in post(client, "/profile/outlook-app", csrf, app_kind="lotus").headers["location"]
+    )
+    from marcelorian.config.settings import load_settings
+
+    with transaction(world.factory) as s:
+        assert load_settings(s).outlook_app == "classic"
+
+
+def test_pubmed_name_is_asked_beside_the_import_button(client, security, world) -> None:
+    csrf = sign_in(client, security)
+    confirm_facts(world, {"full_name": "Reza Shahriari"})
+    page = client.get("/profile").text
+    assert "How does PubMed list your name?" in page and 'value="Shahriari R"' in page
+    post(client, "/profile/publications/import", csrf, pubmed_name="Shahriari RS")
+    with transaction(world.factory) as s:
+        fact = profile.facts(s, world.applicant_id)["pubmed_name"]
+        assert (fact.value, fact.status) == ("Shahriari RS", "confirmed")
