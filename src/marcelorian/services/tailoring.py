@@ -187,9 +187,16 @@ def linked_postings(session: Session, pi_id: int) -> list[Posting]:
     return postings
 
 
+#: Posting statuses that mean the cycle is over: shown, never offered for Email 1.
+CLOSED_STATUSES = frozenset({"closed_cycle", "closed", "expired", "filled"})
+
+
 def confirm_posting(session: Session, pi_id: int, record_id: int, *, now: datetime) -> None:
-    if record_id not in {p.record_id for p in linked_postings(session, pi_id)}:
+    posting = next((p for p in linked_postings(session, pi_id) if p.record_id == record_id), None)
+    if posting is None:
         raise TailoringError("that posting is not linked to this contact")
+    if posting.status in CLOSED_STATUSES:
+        raise TailoringError("that posting's cycle is closed")
     record = session.get(ResearchRecord, record_id)
     assert record is not None
     link = session.scalar(

@@ -135,6 +135,7 @@ def register(app: FastAPI, ui: UIContext) -> None:
                 ),
                 "records": candidates.research_records_for(db, pi.id),
                 "postings": tailoring.linked_postings(db, pi.id),
+                "closed_statuses": tailoring.CLOSED_STATUSES,
                 "verified_topics": tailoring.verified_topics(db, pi.id),
                 "campaigns": db.scalars(select(Campaign).where(Campaign.pi_id == pi.id)).all(),
                 "dnc": dnc.matches(db, pi.id, Mode.LIVE),

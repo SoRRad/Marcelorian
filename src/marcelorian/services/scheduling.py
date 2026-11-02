@@ -20,7 +20,7 @@ from collections.abc import Collection
 from dataclasses import replace
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from marcelorian.config.settings import AppSettings
@@ -210,8 +210,26 @@ def resolve_missed_window_on_reapproval(
             )
 
 
-def dispatchable_message_ids(session: Session, mode: Mode, now: datetime) -> list[int]:
-    """Approved messages whose assigned window is open now, oldest first."""
+def dispatchable_message_ids(
+    session: Session, mode: Mode, now: datetime, *, any_time: bool = False
+) -> list[int]:
+    """Approved messages whose assigned window is open now, oldest first.
+
+    ``any_time``: every approved message that is due, whatever its window (strict send
+    rules off: the applicant sends at any time and schedules it in Outlook).
+    """
+    if any_time:
+        return list(
+            session.scalars(
+                select(Message.id)
+                .where(
+                    Message.mode == mode.value,
+                    Message.state == MessageState.APPROVED_QUEUED.value,
+                    or_(Message.due_at.is_(None), Message.due_at <= now),
+                )
+                .order_by(Message.due_at, Message.id)
+            )
+        )
     return list(
         session.scalars(
             select(Message.id)
