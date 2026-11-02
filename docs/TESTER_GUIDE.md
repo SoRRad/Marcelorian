@@ -38,11 +38,10 @@ Marcelorian starts in **Practice** mode: nothing reaches a real person. There ar
 
 1. Click **Settings** → **Your profile**.
 2. Fill in your answers. Press **Save and confirm all** once at the bottom.
-   - Add **Your name as on your papers** (for example *Shahriari R*) so PubMed finds your publications.
 3. Under **CV**, choose your CV (PDF) and click **Upload CV**.
 4. Under **Signature**, set up your signature and click **Save signature**.
-5. Under **Your Outlook address**, type the address you send from and click **Save address**.
-6. Optional: under **Your publications**, click **Import from PubMed** and mark the ones that are yours.
+5. Under **Your Outlook address**, type the address you send from and click **Save address**. Then choose **Which Outlook do you send from?** and click **Save**.
+6. Under **Your publications**, check **How does PubMed list your name?** (for example *Shahriari R*), click **Import from PubMed**, and mark the ones that are yours.
 
 ### Add and check your leads
 

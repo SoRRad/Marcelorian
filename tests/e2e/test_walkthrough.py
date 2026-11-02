@@ -122,7 +122,10 @@ def test_tester_guide_in_a_real_browser(served, tmp_path: Path) -> None:
         page.fill("#signature textarea", "Alex Synthetic, MD")
         submit(page.locator("#signature button[type=submit]"))
         page.fill("#outlook input[name=email]", "alex.synthetic@example.com")
-        submit(page.locator("#outlook button[type=submit]"))
+        submit(page.locator('#outlook form[action="/profile/outlook"] button[type=submit]'))
+        page.select_option("#outlook select[name=app_kind]", "web")
+        submit(page.locator('#outlook form[action="/profile/outlook-app"] button[type=submit]'))
+        expect(page.locator("main")).to_contain_text("best send option")
         shot("02-profile")
 
         # Leads: import the list (upload by script with the CSRF header).

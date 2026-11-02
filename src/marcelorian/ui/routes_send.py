@@ -54,6 +54,7 @@ def send_context(db: Session, message: Message, now: datetime) -> dict[str, Any]
     return {
         "send": {
             "strict": settings.strict_send_rules,
+            "outlook_app": settings.outlook_app,
             "suggested": suggested,
             "suggested_local": suggested.astimezone(ZoneInfo(institution.iana_tz))
             if suggested and institution and institution.iana_tz

@@ -29,11 +29,17 @@
     <label class="check"><input type="checkbox" name="confirm" value="yes" required> I checked Outlook: the PI has not replied</label>
     {% endif %}
     <div class="quick-buttons">
+      {% if send.outlook_app == "classic" %}
+      <button type="submit" name="method" value="file" class="primary">Email file (classic Outlook)</button>
+      <button type="submit" name="method" value="link">Open in Outlook on the web</button>
+      <button type="submit" name="method" value="copy">Copy the text</button>
+      {% else %}
       <button type="submit" name="method" value="link" class="primary">Open in Outlook on the web</button>
       <button type="submit" name="method" value="copy">Copy the text</button>
       <button type="submit" name="method" value="file">Email file (classic Outlook)</button>
+      {% endif %}
     </div>
-    <p class="note">Outlook on the web works for any Outlook account. Copy the text works everywhere. The email file opens ready to send in classic Outlook; new Outlook may open it read-only.</p>
+    <p class="note">{% if send.outlook_app == "classic" %}The email file opens in classic Outlook ready to send, with your CV attached.{% elif send.outlook_app == "new" %}With the new Outlook app, use the web link (it opens your same mailbox in the browser) or copy the text; the email file may open read-only there.{% else %}Outlook on the web works for any work or school account; copy the text works everywhere.{% endif %} You can change your Outlook in <a href="/profile#outlook">Settings → Your profile</a>.</p>
   </form>
   {% else %}
   <p class="warn-text">Not yet: {{ send.reason }}</p>

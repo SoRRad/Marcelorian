@@ -78,6 +78,10 @@ class AppSettings:
     #: list always holds. On: the earlier strict rules (send window, spacing, 24-hour
     #: total, institution limits) lock the button again.
     strict_send_rules: bool = False
+    #: The Outlook the applicant sends from (asked beside the Outlook address): ``web``
+    #: (Outlook on the web), ``new`` (the new Outlook app) or ``classic``. It only orders
+    #: the send buttons: the one that works best for that Outlook comes first.
+    outlook_app: str = "web"
 
     def window_policy(self) -> WindowPolicy:
         return WindowPolicy(
@@ -114,6 +118,7 @@ _CAP_KEYS = (
 )
 #: Same-place scopes, most conservative first (a narrower scope blocks less).
 SAME_PLACE_SCOPES = ("institution", "department", "lab")
+OUTLOOK_APPS = ("web", "new", "classic")
 _FIELD_NAMES = {f.name for f in fields(AppSettings)}
 
 
@@ -169,6 +174,8 @@ def validate(settings: AppSettings) -> AppSettings:
     ):
         if not isinstance(getattr(settings, key), bool):
             raise SettingsError(f"{key} must be true or false")
+    if settings.outlook_app not in OUTLOOK_APPS:
+        raise SettingsError("outlook_app must be web, new or classic")
     if settings.same_place_scope not in SAME_PLACE_SCOPES:
         raise SettingsError("same_place_scope must be institution, department or lab")
     signature = settings.email_signature

@@ -87,3 +87,25 @@ def test_practice_try_in_outlook_goes_to_your_own_address(relaxed: World) -> Non
     assert package.to == "me@synthetic-hospital.test"
     assert package.compose_url and "me%40synthetic-hospital.test" in package.compose_url
     assert relaxed.message(mid).state == "approved_queued"  # nothing recorded
+
+
+def test_classic_outlook_puts_the_email_file_first(outlook: World) -> None:
+    from fastapi.testclient import TestClient
+
+    from marcelorian.ui.app import create_app
+    from marcelorian.ui.security import UISecurity
+    from tests.fakes.lookups import FakeFetcher
+    from tests.security.test_ui_security import ORIGIN, PORT, sign_in
+
+    _camp, mid = _email1(outlook)
+    security = UISecurity("127.0.0.1", PORT, outlook.clock)
+    client = TestClient(
+        create_app(security, outlook.factory, outlook.clock, fetcher=FakeFetcher()),
+        base_url=ORIGIN,
+    )
+    sign_in(client, security)
+    page = client.get(f"/messages/{mid}").text
+    assert page.index('value="link" class="primary"') < page.index('value="file"')
+    outlook.settings(outlook_app="classic")
+    page = client.get(f"/messages/{mid}").text
+    assert page.index('value="file" class="primary"') < page.index('value="link"')

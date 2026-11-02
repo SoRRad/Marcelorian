@@ -704,4 +704,19 @@ owner's written description of each finding.
     - **Own publications.** The PubMed search now combines ORCID, the full name, "Last
       Initials", and an optional "name as on your papers" with OR, ignoring degrees in
       the name. It says when nothing was found.
+55. **Owner answers (2026-11-02).**
+    - **Same institution, another lab:** stays a warning (strict send rules off). Only the
+      same lab, the same person or address, the do-not-contact list, or a missing
+      address block a send.
+    - **Work (school) Outlook:** the default send order stays: Outlook on the web
+      (outlook.office.com) first, then copy the text, then the email file.
+    - **Questions asked in the screens, not in chat** (owner: "ask for it in the
+      sections I need to fill out"):
+      - "Which Outlook do you send from?" (web / new app / classic) is asked beside the
+        Outlook address. It is stored as the `outlook_app` setting and orders the send
+        buttons; classic puts the email file first.
+      - "How does PubMed list your name?" is asked beside **Import from PubMed**,
+        prefilled with "Surname Initials" from the full name, and saved as the
+        confirmed `pubmed_name` answer. The same field sits right after the full name
+        in the profile form.
 
